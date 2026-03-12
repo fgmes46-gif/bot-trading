@@ -7,7 +7,7 @@ from telegram.ext import Updater, CommandHandler, CallbackContext
 
 print("🚀 BOT RADAR ULTRA INICIADO")
 
-TOKEN = "SEU_TOKEN_TELEGRAM"
+TOKEN = "8787052983:AAF356OSvJ6lnzodM7dRWXQMR_8i1JJHlIc"
 CHAT_ID = "SEU_CHAT_ID"
 
 bot = Bot(token=TOKEN)
