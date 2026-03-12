@@ -1,1 +1,1 @@
-
+print("BOT TRADING INICIADO")
