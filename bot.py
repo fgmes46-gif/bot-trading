@@ -1,42 +1,48 @@
 import os
 import requests
 import random
+import json
 from datetime import datetime
 from telegram.ext import Updater, CommandHandler
 
-print("🚀 RADAR ULTRA 3.0 INICIANDO...")
+print("🚀 RADAR FAMÍLIA INICIANDO")
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-if not TOKEN:
-    print("❌ BOT_TOKEN não encontrado")
-    exit()
-
 API_URL = "https://api.binance.com/api/v3/klines"
 
-# --------------------------------
-# MOEDAS
-# --------------------------------
-
-SCAN_COINS = [
+COINS = [
 "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
-"LTCUSDT","TRXUSDT","APTUSDT","ARBUSDT","OPUSDT",
-"ATOMUSDT","NEARUSDT","FILUSDT","INJUSDT","SANDUSDT",
-"FTMUSDT","GALAUSDT","AAVEUSDT","ALGOUSDT","EGLDUSDT",
-"DYDXUSDT","RNDRUSDT","FLOWUSDT","KAVAUSDT","ZILUSDT",
-"GMTUSDT","CHZUSDT","CRVUSDT","COMPUSDT","SNXUSDT",
-"UNIUSDT","1INCHUSDT","BATUSDT","LDOUSDT","ENSUSDT"
+"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT"
 ]
 
 TIMEFRAMES = ["1m","3m","5m"]
 
 sent_cache = set()
 
-# --------------------------------
-# BINANCE DATA
-# --------------------------------
+asia_signals = 0
+west_signals = 0
+
+MAX_ASIA = 10
+MAX_WEST = 10
+
+# -----------------------------
+# IDENTIFICAR SESSÃO
+# -----------------------------
+
+def session_type():
+
+    hour = datetime.utcnow().hour
+
+    if 0 <= hour <= 7:
+        return "ASIA"
+
+    return "WEST"
+
+# -----------------------------
+# PEGAR CANDLES
+# -----------------------------
 
 def get_candles(symbol, interval="1m", limit=50):
 
@@ -67,9 +73,9 @@ def get_candles(symbol, interval="1m", limit=50):
 
     return candles
 
-# --------------------------------
+# -----------------------------
 # RSI
-# --------------------------------
+# -----------------------------
 
 def calculate_rsi(candles, period=14):
 
@@ -99,25 +105,11 @@ def calculate_rsi(candles, period=14):
 
     return rsi
 
-# --------------------------------
-# VOLUME SPIKE
-# --------------------------------
+# -----------------------------
+# TENDÊNCIA
+# -----------------------------
 
-def volume_spike(candles):
-
-    volumes = [c["volume"] for c in candles]
-
-    avg = sum(volumes[:-1]) / len(volumes[:-1])
-
-    last = volumes[-1]
-
-    return last > avg * 1.5
-
-# --------------------------------
-# TREND
-# --------------------------------
-
-def trend_direction(candles):
+def trend(candles):
 
     closes = [c["close"] for c in candles[-10:]]
 
@@ -129,25 +121,64 @@ def trend_direction(candles):
 
     return "SIDE"
 
-# --------------------------------
-# ANTI LATERAL
-# --------------------------------
+# -----------------------------
+# VOLUME
+# -----------------------------
 
-def anti_lateral(candles):
+def volume_spike(candles):
+
+    volumes = [c["volume"] for c in candles]
+
+    avg = sum(volumes[:-1]) / len(volumes[:-1])
+
+    return volumes[-1] > avg * 1.5
+
+# -----------------------------
+# VOLATILIDADE
+# -----------------------------
+
+def volatility(candles):
 
     highs = [c["high"] for c in candles[-10:]]
     lows = [c["low"] for c in candles[-10:]]
 
-    range_price = max(highs) - min(lows)
+    return max(highs) - min(lows)
 
-    if range_price < (candles[-1]["close"] * 0.002):
+# -----------------------------
+# FILTRO LATERAL
+# -----------------------------
+
+def anti_lateral(candles):
+
+    v = volatility(candles)
+
+    if v < candles[-1]["close"] * 0.002:
         return False
 
     return True
 
-# --------------------------------
-# ANALISE
-# --------------------------------
+# -----------------------------
+# ROMPIMENTO
+# -----------------------------
+
+def breakout(candles):
+
+    highs = [c["high"] for c in candles[-20:]]
+    lows = [c["low"] for c in candles[-20:]]
+
+    last = candles[-1]["close"]
+
+    if last > max(highs[:-1]):
+        return "UP"
+
+    if last < min(lows[:-1]):
+        return "DOWN"
+
+    return None
+
+# -----------------------------
+# ANALISAR PAR
+# -----------------------------
 
 def analyze(symbol):
 
@@ -176,24 +207,30 @@ def analyze(symbol):
         return None
 
     rsi = calculate_rsi(candles)
-
     vol = volume_spike(candles)
-
-    trend = trend_direction(candles)
+    trend_dir = trend(candles)
+    break_dir = breakout(candles)
+    volat = volatility(candles)
 
     score = 0
 
     if vol:
+        score += 20
+
+    if direction == "CALL" and trend_dir == "UP":
         score += 25
 
-    if direction == "CALL" and trend == "UP":
-        score += 30
+    if direction == "PUT" and trend_dir == "DOWN":
+        score += 25
 
-    if direction == "PUT" and trend == "DOWN":
-        score += 30
+    if break_dir:
+        score += 20
 
     if rsi < 30 or rsi > 70:
-        score += 25
+        score += 10
+
+    if volat > candles[-1]["close"] * 0.005:
+        score += 10
 
     if score < 50:
         return None
@@ -202,98 +239,75 @@ def analyze(symbol):
         "symbol": symbol,
         "direction": direction,
         "timeframe": timeframe,
-        "volume": vol,
-        "rsi": round(rsi,2),
-        "trend": trend,
         "score": score
     }
 
-# --------------------------------
-# SESSÃO ASIÁTICA
-# --------------------------------
+# -----------------------------
+# SALVAR HISTÓRICO
+# -----------------------------
 
-def asian_session():
+def save_signal(data):
 
-    hour = datetime.utcnow().hour
+    try:
+        with open("signals.json","r") as f:
+            history = json.load(f)
+    except:
+        history = []
 
-    return hour >= 23 or hour <= 6
+    history.append(data)
 
-# --------------------------------
-# SCANNER
-# --------------------------------
+    with open("signals.json","w") as f:
+        json.dump(history,f,indent=4)
 
-def scan():
-
-    signals = []
-
-    for coin in SCAN_COINS:
-
-        try:
-
-            result = analyze(coin)
-
-            if result:
-                signals.append(result)
-
-        except:
-            pass
-
-    print(f"📊 Moedas analisadas: {len(SCAN_COINS)}")
-
-    return signals
-
-# --------------------------------
-# TELEGRAM
-# --------------------------------
-
-def start(update, context):
-
-    update.message.reply_text(
-        "🤖 RADAR ULTRA 3.0 ATIVO"
-    )
-
-def status(update, context):
-
-    update.message.reply_text(
-        "📡 Scanner funcionando..."
-    )
-
-# --------------------------------
+# -----------------------------
 # RADAR
-# --------------------------------
+# -----------------------------
 
 def radar(context):
 
-    if not CHAT_ID:
+    global asia_signals
+    global west_signals
+
+    session = session_type()
+
+    if session == "ASIA" and asia_signals >= MAX_ASIA:
         return
 
-    print("🔎 Escaneando mercado...")
+    if session == "WEST" and west_signals >= MAX_WEST:
+        return
 
-    signals = scan()
+    for coin in COINS:
 
-    for s in signals:
+        result = analyze(coin)
 
-        key = f"{s['symbol']}-{s['direction']}"
+        if not result:
+            continue
+
+        key = f"{result['symbol']}-{result['direction']}"
 
         if key in sent_cache:
             continue
 
         sent_cache.add(key)
 
+        if session == "ASIA":
+            asia_signals += 1
+        else:
+            west_signals += 1
+
+        now = datetime.utcnow().strftime("%H:%M")
+
         msg = f"""
-🚨 SINAL FORTE
+⚠️ SINAL CRIPTO
 
-MOEDA: {s['symbol']}
-DIREÇÃO: {s['direction']}
-TEMPO: {s['timeframe']}
+PAR: {result['symbol']}
+TEMPO: {result['timeframe']}
 
-RSI: {s['rsi']}
-TREND: {s['trend']}
-VOLUME: {"SPIKE" if s["volume"] else "NORMAL"}
+ENTRADA: {now}
+DIREÇÃO: {result['direction']}
 
-PROBABILIDADE: {s['score']}%
-
-SESSÃO ASIÁTICA: {"SIM" if asian_session() else "NÃO"}
+FORÇA: {result['score']}%
+SESSÃO: {session}
 """
 
         context.bot.send_message(
@@ -301,22 +315,74 @@ SESSÃO ASIÁTICA: {"SIM" if asian_session() else "NÃO"}
             text=msg
         )
 
-# --------------------------------
+        save_signal({
+            "symbol": result['symbol'],
+            "direction": result['direction'],
+            "timeframe": result['timeframe'],
+            "session": session,
+            "time": now
+        })
+
+# -----------------------------
+# PAINEL
+# -----------------------------
+
+def painel(update, context):
+
+    try:
+        with open("signals.json","r") as f:
+            history = json.load(f)
+    except:
+        update.message.reply_text("Sem dados ainda.")
+        return
+
+    total = len(history)
+
+    pairs = {}
+
+    for s in history:
+
+        p = s["symbol"]
+
+        if p not in pairs:
+            pairs[p] = 0
+
+        pairs[p] += 1
+
+    msg = f"\n📊 PAINEL DO BOT\n\nTotal sinais: {total}\n\nTOP PARES\n"
+
+    for p in pairs:
+
+        msg += f"{p}: {pairs[p]}\n"
+
+    update.message.reply_text(msg)
+
+# -----------------------------
+# START
+# -----------------------------
+
+def start(update, context):
+
+    update.message.reply_text(
+        "🤖 RADAR FAMÍLIA ONLINE"
+    )
+
+# -----------------------------
 # START BOT
-# --------------------------------
+# -----------------------------
 
 updater = Updater(TOKEN, use_context=True)
 
 dp = updater.dispatcher
 
 dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CommandHandler("status", status))
+dp.add_handler(CommandHandler("painel", painel))
 
 job_queue = updater.job_queue
 
 job_queue.run_repeating(radar, interval=60, first=10)
 
-print("✅ BOT ONLINE")
+print("✅ BOT ATIVO")
 
 updater.start_polling()
 updater.idle()
