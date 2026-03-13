@@ -1,12 +1,10 @@
 import os
-import time
 import requests
 import random
 from datetime import datetime
-
 from telegram.ext import Updater, CommandHandler
 
-print("🚀 BOT RADAR ULTRA INICIANDO...")
+print("🚀 RADAR ULTRA 3.0 INICIANDO...")
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -15,41 +13,32 @@ if not TOKEN:
     print("❌ BOT_TOKEN não encontrado")
     exit()
 
-# ------------------------------
-# CONFIG
-# ------------------------------
-
 API_URL = "https://api.binance.com/api/v3/klines"
 
+# --------------------------------
+# MOEDAS
+# --------------------------------
+
 SCAN_COINS = [
-"BTCUSDT",
-"ETHUSDT",
-"BNBUSDT",
-"SOLUSDT",
-"XRPUSDT",
-"ADAUSDT",
-"DOGEUSDT",
-"AVAXUSDT",
-"LINKUSDT",
-"MATICUSDT",
-"LTCUSDT",
-"TRXUSDT",
-"APTUSDT",
-"ARBUSDT",
-"OPUSDT"
+"BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
+"LTCUSDT","TRXUSDT","APTUSDT","ARBUSDT","OPUSDT",
+"ATOMUSDT","NEARUSDT","FILUSDT","INJUSDT","SANDUSDT",
+"FTMUSDT","GALAUSDT","AAVEUSDT","ALGOUSDT","EGLDUSDT",
+"DYDXUSDT","RNDRUSDT","FLOWUSDT","KAVAUSDT","ZILUSDT",
+"GMTUSDT","CHZUSDT","CRVUSDT","COMPUSDT","SNXUSDT",
+"UNIUSDT","1INCHUSDT","BATUSDT","LDOUSDT","ENSUSDT"
 ]
 
-TIMEFRAMES = {
-"1m":"1m",
-"3m":"3m",
-"5m":"5m"
-}
+TIMEFRAMES = ["1m","3m","5m"]
 
-# ------------------------------
+sent_cache = set()
+
+# --------------------------------
 # BINANCE DATA
-# ------------------------------
+# --------------------------------
 
-def get_candles(symbol, interval="1m", limit=30):
+def get_candles(symbol, interval="1m", limit=50):
 
     params = {
         "symbol": symbol,
@@ -57,54 +46,119 @@ def get_candles(symbol, interval="1m", limit=30):
         "limit": limit
     }
 
-    r = requests.get(API_URL, params=params, timeout=10)
+    r = requests.get(API_URL, params=params)
+
+    if r.status_code != 200:
+        return []
 
     data = r.json()
 
     candles = []
 
     for c in data:
+
         candles.append({
             "open": float(c[1]),
-            "close": float(c[4]),
             "high": float(c[2]),
             "low": float(c[3]),
+            "close": float(c[4]),
             "volume": float(c[5])
         })
 
     return candles
 
+# --------------------------------
+# RSI
+# --------------------------------
 
-# ------------------------------
-# ANTI FAKE FILTER
-# ------------------------------
-
-def anti_fake(candles):
+def calculate_rsi(candles, period=14):
 
     closes = [c["close"] for c in candles]
 
-    avg = sum(closes)/len(closes)
+    gains = []
+    losses = []
 
-    last = closes[-1]
+    for i in range(1, len(closes)):
 
-    if abs(last-avg)/avg > 0.03:
+        diff = closes[i] - closes[i-1]
+
+        if diff >= 0:
+            gains.append(diff)
+        else:
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[-period:]) / period if gains else 0
+    avg_loss = sum(losses[-period:]) / period if losses else 0
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+# --------------------------------
+# VOLUME SPIKE
+# --------------------------------
+
+def volume_spike(candles):
+
+    volumes = [c["volume"] for c in candles]
+
+    avg = sum(volumes[:-1]) / len(volumes[:-1])
+
+    last = volumes[-1]
+
+    return last > avg * 1.5
+
+# --------------------------------
+# TREND
+# --------------------------------
+
+def trend_direction(candles):
+
+    closes = [c["close"] for c in candles[-10:]]
+
+    if closes[-1] > closes[0]:
+        return "UP"
+
+    if closes[-1] < closes[0]:
+        return "DOWN"
+
+    return "SIDE"
+
+# --------------------------------
+# ANTI LATERAL
+# --------------------------------
+
+def anti_lateral(candles):
+
+    highs = [c["high"] for c in candles[-10:]]
+    lows = [c["low"] for c in candles[-10:]]
+
+    range_price = max(highs) - min(lows)
+
+    if range_price < (candles[-1]["close"] * 0.002):
         return False
 
     return True
 
-
-# ------------------------------
-# SIGNAL LOGIC
-# ------------------------------
+# --------------------------------
+# ANALISE
+# --------------------------------
 
 def analyze(symbol):
 
-    candles = get_candles(symbol)
+    timeframe = random.choice(TIMEFRAMES)
+
+    candles = get_candles(symbol, timeframe)
 
     if not candles:
         return None
 
-    if not anti_fake(candles):
+    if not anti_lateral(candles):
         return None
 
     last = candles[-1]
@@ -121,18 +175,42 @@ def analyze(symbol):
     if not direction:
         return None
 
-    timeframe = random.choice(["1m","3m","5m"])
+    rsi = calculate_rsi(candles)
+
+    vol = volume_spike(candles)
+
+    trend = trend_direction(candles)
+
+    score = 0
+
+    if vol:
+        score += 25
+
+    if direction == "CALL" and trend == "UP":
+        score += 30
+
+    if direction == "PUT" and trend == "DOWN":
+        score += 30
+
+    if rsi < 30 or rsi > 70:
+        score += 25
+
+    if score < 50:
+        return None
 
     return {
-        "symbol":symbol,
-        "direction":direction,
-        "timeframe":timeframe
+        "symbol": symbol,
+        "direction": direction,
+        "timeframe": timeframe,
+        "volume": vol,
+        "rsi": round(rsi,2),
+        "trend": trend,
+        "score": score
     }
 
-
-# ------------------------------
-# ASIAN SESSION RADAR
-# ------------------------------
+# --------------------------------
+# SESSÃO ASIÁTICA
+# --------------------------------
 
 def asian_session():
 
@@ -140,10 +218,9 @@ def asian_session():
 
     return hour >= 23 or hour <= 6
 
-
-# ------------------------------
+# --------------------------------
 # SCANNER
-# ------------------------------
+# --------------------------------
 
 def scan():
 
@@ -161,30 +238,29 @@ def scan():
         except:
             pass
 
+    print(f"📊 Moedas analisadas: {len(SCAN_COINS)}")
+
     return signals
 
-
-# ------------------------------
+# --------------------------------
 # TELEGRAM
-# ------------------------------
+# --------------------------------
 
 def start(update, context):
 
     update.message.reply_text(
-        "🤖 BOT RADAR ULTRA ATIVO"
+        "🤖 RADAR ULTRA 3.0 ATIVO"
     )
-
 
 def status(update, context):
 
     update.message.reply_text(
-        "📡 Scanner rodando..."
+        "📡 Scanner funcionando..."
     )
 
-
-# ------------------------------
-# MAIN LOOP
-# ------------------------------
+# --------------------------------
+# RADAR
+# --------------------------------
 
 def radar(context):
 
@@ -195,19 +271,29 @@ def radar(context):
 
     signals = scan()
 
-    if not signals:
-        return
-
     for s in signals:
 
+        key = f"{s['symbol']}-{s['direction']}"
+
+        if key in sent_cache:
+            continue
+
+        sent_cache.add(key)
+
         msg = f"""
-🚨 SINAL DETECTADO
+🚨 SINAL FORTE
 
 MOEDA: {s['symbol']}
 DIREÇÃO: {s['direction']}
 TEMPO: {s['timeframe']}
 
-Sessão Asiática: {"SIM" if asian_session() else "NÃO"}
+RSI: {s['rsi']}
+TREND: {s['trend']}
+VOLUME: {"SPIKE" if s["volume"] else "NORMAL"}
+
+PROBABILIDADE: {s['score']}%
+
+SESSÃO ASIÁTICA: {"SIM" if asian_session() else "NÃO"}
 """
 
         context.bot.send_message(
@@ -215,316 +301,22 @@ Sessão Asiática: {"SIM" if asian_session() else "NÃO"}
             text=msg
         )
 
-
-# ------------------------------
+# --------------------------------
 # START BOT
-# ------------------------------
+# --------------------------------
 
-updater = Updater(TOKEN)
+updater = Updater(TOKEN, use_context=True)
 
 dp = updater.dispatcher
 
 dp.add_handler(CommandHandler("start", start))
 dp.add_handler(CommandHandler("status", status))
 
-job = updater.job_queue
-job.run_repeating(radar, interval=60, first=10)
+job_queue = updater.job_queue
+
+job_queue.run_repeating(radar, interval=60, first=10)
 
 print("✅ BOT ONLINE")
 
 updater.start_polling()
 updater.idle()
-
-# ================================
-# RADAR ULTRA PRO UPGRADE
-# ================================
-
-def get_klines(symbol, interval="1m", limit=100):
-    url = f"{API_URL}/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        closes = [float(c[4]) for c in data]
-        volumes = [float(c[5]) for c in data]
-        return closes, volumes
-    except:
-        return None, None
-
-
-def calculate_rsi(prices, period=14):
-    if len(prices) < period:
-        return 50
-
-    gains = []
-    losses = []
-
-    for i in range(1, len(prices)):
-        diff = prices[i] - prices[i-1]
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
-
-    avg_gain = sum(gains[-period:]) / period if gains else 0.001
-    avg_loss = sum(losses[-period:]) / period if losses else 0.001
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-
-def detect_signal(symbol):
-
-    closes, volumes = get_klines(symbol)
-
-    if not closes:
-        return None
-
-    rsi = calculate_rsi(closes)
-
-    last_price = closes[-1]
-    prev_price = closes[-2]
-
-    volume_now = volumes[-1]
-    volume_prev = volumes[-2]
-
-    change = ((last_price - prev_price) / prev_price) * 100
-
-    score = 0
-
-    if rsi < 30:
-        score += 30
-
-    if rsi > 70:
-        score += 30
-
-    if volume_now > volume_prev * 1.5:
-        score += 25
-
-    if abs(change) > 0.2:
-        score += 20
-
-    if score >= 60:
-
-        direction = "COMPRA" if change > 0 else "VENDA"
-
-        return f"""
-🚨 SINAL DETECTADO
-
-Moeda: {symbol}
-Direção: {direction}
-
-RSI: {round(rsi,2)}
-Movimento: {round(change,3)}%
-
-Probabilidade: {score}%
-
-⚡ RADAR ULTRA PRO
-"""
-
-    return None
-
-
-def radar_ultra():
-
-    while True:
-
-        try:
-
-            for coin in SCAN_COINS:
-
-                signal = detect_signal(coin)
-
-                if signal:
-
-                    try:
-                        requests.post(
-                            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                            json={
-                                "chat_id": CHAT_ID,
-                                "text": signal
-                            }
-                        )
-                    except:
-                        pass
-
-                time.sleep(2)
-
-        except Exception as e:
-            print("Erro radar:", e)
-
-        time.sleep(30)
-
-def radar():
-
-    while True:
-
-        if BOT_RUNNING:
-
-            for coin in SCAN_COINS:
-
-                print("Analisando:", coin)
-
-                # aqui depois vamos adicionar análise RSI, volume etc.
-
-                time.sleep(2)
-
-        time.sleep(10)
-
-
-# iniciar radar automático
-import threading
-
-threading.Thread(target=radar).start()
-
-# ==============================
-# MODULO DE ANALISE PROFISSIONAL
-# ==============================
-
-import requests
-import statistics
-import time
-
-API_URL = "https://api.binance.com/api"
-
-SCAN_COINS = [
-"BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
-"LTCUSDT","TRXUSDT","APTUSDT","ARBUSDT","OPUSDT"
-]
-
-def get_klines(symbol, interval="1m", limit=50):
-
-    url = f"{API_URL}/v3/klines"
-
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-
-    r = requests.get(url, params=params, timeout=10)
-
-    data = r.json()
-
-    closes = [float(x[4]) for x in data]
-    volumes = [float(x[5]) for x in data]
-
-    return closes, volumes
-
-
-def calculate_rsi(prices, period=14):
-
-    gains = []
-    losses = []
-
-    for i in range(1, len(prices)):
-
-        diff = prices[i] - prices[i-1]
-
-        if diff > 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
-
-    avg_gain = sum(gains[-period:]) / period if gains else 0.001
-    avg_loss = sum(losses[-period:]) / period if losses else 0.001
-
-    rs = avg_gain / avg_loss
-
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi
-
-
-def detect_signal(symbol):
-
-    closes, volumes = get_klines(symbol)
-
-    rsi = calculate_rsi(closes)
-
-    price_now = closes[-1]
-    price_prev = closes[-2]
-
-    volume_now = volumes[-1]
-    volume_avg = statistics.mean(volumes)
-
-    change = ((price_now - price_prev) / price_prev) * 100
-
-    score = 0
-
-    if rsi < 30:
-        score += 25
-
-    if rsi > 70:
-        score += 25
-
-    if volume_now > volume_avg * 1.5:
-        score += 30
-
-    if abs(change) > 0.2:
-        score += 20
-
-    if score >= 60:
-
-        direction = "COMPRA" if change > 0 else "VENDA"
-
-        return f"""
-🚨 RADAR ULTRA
-
-Moeda: {symbol}
-
-Direção: {direction}
-
-RSI: {round(rsi,2)}
-Volume: forte
-Movimento: {round(change,3)}%
-
-Força do sinal: {score}%
-"""
-
-    return None
-
-
-def radar_ultra():
-
-    while True:
-
-        if BOT_RUNNING:
-
-            for coin in SCAN_COINS:
-
-                try:
-
-                    signal = detect_signal(coin)
-
-                    if signal:
-
-                        requests.post(
-                            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                            json={
-                                "chat_id": CHAT_ID,
-                                "text": signal
-                            }
-                        )
-
-                        time.sleep(10)
-
-                except Exception as e:
-
-                    print("erro:", e)
-
-                time.sleep(2)
-
-        time.sleep(10)
-
-
-import threading
-
-threading.Thread(target=radar_ultra).start()
