@@ -221,3 +221,134 @@ print("✅ BOT ONLINE")
 
 updater.start_polling()
 updater.idle()
+
+# ================================
+# RADAR ULTRA PRO UPGRADE
+# ================================
+
+def get_klines(symbol, interval="1m", limit=100):
+    url = f"{API_URL}/v3/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        closes = [float(c[4]) for c in data]
+        volumes = [float(c[5]) for c in data]
+        return closes, volumes
+    except:
+        return None, None
+
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period:
+        return 50
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(prices)):
+        diff = prices[i] - prices[i-1]
+        if diff > 0:
+            gains.append(diff)
+        else:
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[-period:]) / period if gains else 0.001
+    avg_loss = sum(losses[-period:]) / period if losses else 0.001
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def detect_signal(symbol):
+
+    closes, volumes = get_klines(symbol)
+
+    if not closes:
+        return None
+
+    rsi = calculate_rsi(closes)
+
+    last_price = closes[-1]
+    prev_price = closes[-2]
+
+    volume_now = volumes[-1]
+    volume_prev = volumes[-2]
+
+    change = ((last_price - prev_price) / prev_price) * 100
+
+    score = 0
+
+    if rsi < 30:
+        score += 30
+
+    if rsi > 70:
+        score += 30
+
+    if volume_now > volume_prev * 1.5:
+        score += 25
+
+    if abs(change) > 0.2:
+        score += 20
+
+    if score >= 60:
+
+        direction = "COMPRA" if change > 0 else "VENDA"
+
+        return f"""
+🚨 SINAL DETECTADO
+
+Moeda: {symbol}
+Direção: {direction}
+
+RSI: {round(rsi,2)}
+Movimento: {round(change,3)}%
+
+Probabilidade: {score}%
+
+⚡ RADAR ULTRA PRO
+"""
+
+    return None
+
+
+def radar_ultra():
+
+    while True:
+
+        try:
+
+            for coin in SCAN_COINS:
+
+                signal = detect_signal(coin)
+
+                if signal:
+
+                    try:
+                        requests.post(
+                            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                            json={
+                                "chat_id": CHAT_ID,
+                                "text": signal
+                            }
+                        )
+                    except:
+                        pass
+
+                time.sleep(2)
+
+        except Exception as e:
+            print("Erro radar:", e)
+
+        time.sleep(30)
+
+
+# iniciar radar automático
+import threading
+threading.Thread(target=radar_ultra).start()
