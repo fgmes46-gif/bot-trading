@@ -22,8 +22,21 @@ if not TOKEN:
 API_URL = "https://api.binance.com/api/v3/klines"
 
 SCAN_COINS = [
-"BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT"
+"BTCUSDT",
+"ETHUSDT",
+"BNBUSDT",
+"SOLUSDT",
+"XRPUSDT",
+"ADAUSDT",
+"DOGEUSDT",
+"AVAXUSDT",
+"LINKUSDT",
+"MATICUSDT",
+"LTCUSDT",
+"TRXUSDT",
+"APTUSDT",
+"ARBUSDT",
+"OPUSDT"
 ]
 
 TIMEFRAMES = {
@@ -347,6 +360,22 @@ def radar_ultra():
             print("Erro radar:", e)
 
         time.sleep(30)
+
+def radar():
+
+    while True:
+
+        if BOT_RUNNING:
+
+            for coin in SCAN_COINS:
+
+                print("Analisando:", coin)
+
+                # aqui depois vamos adicionar análise RSI, volume etc.
+
+                time.sleep(2)
+
+        time.sleep(10)
 
 
 # iniciar radar automático
