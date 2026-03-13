@@ -351,4 +351,151 @@ def radar_ultra():
 
 # iniciar radar automático
 import threading
+
+threading.Thread(target=radar).start()
+
+# ==============================
+# MODULO DE ANALISE PROFISSIONAL
+# ==============================
+
+import requests
+import statistics
+import time
+
+API_URL = "https://api.binance.com/api"
+
+SCAN_COINS = [
+"BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","MATICUSDT",
+"LTCUSDT","TRXUSDT","APTUSDT","ARBUSDT","OPUSDT"
+]
+
+def get_klines(symbol, interval="1m", limit=50):
+
+    url = f"{API_URL}/v3/klines"
+
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
+
+    r = requests.get(url, params=params, timeout=10)
+
+    data = r.json()
+
+    closes = [float(x[4]) for x in data]
+    volumes = [float(x[5]) for x in data]
+
+    return closes, volumes
+
+
+def calculate_rsi(prices, period=14):
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(prices)):
+
+        diff = prices[i] - prices[i-1]
+
+        if diff > 0:
+            gains.append(diff)
+        else:
+            losses.append(abs(diff))
+
+    avg_gain = sum(gains[-period:]) / period if gains else 0.001
+    avg_loss = sum(losses[-period:]) / period if losses else 0.001
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
+def detect_signal(symbol):
+
+    closes, volumes = get_klines(symbol)
+
+    rsi = calculate_rsi(closes)
+
+    price_now = closes[-1]
+    price_prev = closes[-2]
+
+    volume_now = volumes[-1]
+    volume_avg = statistics.mean(volumes)
+
+    change = ((price_now - price_prev) / price_prev) * 100
+
+    score = 0
+
+    if rsi < 30:
+        score += 25
+
+    if rsi > 70:
+        score += 25
+
+    if volume_now > volume_avg * 1.5:
+        score += 30
+
+    if abs(change) > 0.2:
+        score += 20
+
+    if score >= 60:
+
+        direction = "COMPRA" if change > 0 else "VENDA"
+
+        return f"""
+🚨 RADAR ULTRA
+
+Moeda: {symbol}
+
+Direção: {direction}
+
+RSI: {round(rsi,2)}
+Volume: forte
+Movimento: {round(change,3)}%
+
+Força do sinal: {score}%
+"""
+
+    return None
+
+
+def radar_ultra():
+
+    while True:
+
+        if BOT_RUNNING:
+
+            for coin in SCAN_COINS:
+
+                try:
+
+                    signal = detect_signal(coin)
+
+                    if signal:
+
+                        requests.post(
+                            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                            json={
+                                "chat_id": CHAT_ID,
+                                "text": signal
+                            }
+                        )
+
+                        time.sleep(10)
+
+                except Exception as e:
+
+                    print("erro:", e)
+
+                time.sleep(2)
+
+        time.sleep(10)
+
+
+import threading
+
 threading.Thread(target=radar_ultra).start()
