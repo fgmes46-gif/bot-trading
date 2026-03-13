@@ -1,249 +1,223 @@
-import requests
-import time
-import random
-from datetime import datetime, timedelta
-from telegram import Bot, Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
-
-print("🚀 BOT RADAR ULTRA INICIADO")
-
 import os
+import time
+import requests
+import random
+from datetime import datetime
+
 from telegram.ext import Updater, CommandHandler
 
+print("🚀 BOT RADAR ULTRA INICIANDO...")
+
 TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 if not TOKEN:
-    print("TOKEN NÃO ENCONTRADO")
+    print("❌ BOT_TOKEN não encontrado")
     exit()
 
-bot_active = False
+# ------------------------------
+# CONFIG
+# ------------------------------
 
-asia_open_alert = False
-asia_close_alert = False
+API_URL = "https://api.binance.com/api/v3/klines"
 
-# ===============================
-# COMANDOS TELEGRAM
-# ===============================
+SCAN_COINS = [
+"BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+"ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT"
+]
 
-def ligar(update: Update, context: CallbackContext):
-    global bot_active
-    bot_active = True
-    update.message.reply_text("✅ Bot ligado")
+TIMEFRAMES = {
+"1m":"1m",
+"3m":"3m",
+"5m":"5m"
+}
 
-def desligar(update: Update, context: CallbackContext):
-    global bot_active
-    bot_active = False
-    update.message.reply_text("⛔ Bot desligado")
+# ------------------------------
+# BINANCE DATA
+# ------------------------------
 
-def status(update: Update, context: CallbackContext):
-
-    if bot_active:
-        s = "🟢 ATIVO"
-    else:
-        s = "🔴 DESLIGADO"
-
-    update.message.reply_text(f"Status do bot: {s}")
-
-# ===============================
-# MERCADO ASIATICO
-# ===============================
-
-def asian_market():
-
-    global asia_open_alert
-    global asia_close_alert
-
-    now = datetime.utcnow()
-    hour = now.hour
-
-    if hour == 0 and not asia_open_alert:
-
-        bot.send_message(chat_id=CHAT_ID,
-        text="🌏 Mercado Asiático ABERTO")
-
-        asia_open_alert = True
-        asia_close_alert = False
-
-    if hour == 8 and not asia_close_alert:
-
-        bot.send_message(chat_id=CHAT_ID,
-        text="🌏 Mercado Asiático FECHANDO")
-
-        asia_close_alert = True
-        asia_open_alert = False
-
-# ===============================
-# PEGAR MERCADO
-# ===============================
-
-def get_markets():
-
-    url = "https://api.coingecko.com/api/v3/coins/markets"
+def get_candles(symbol, interval="1m", limit=30):
 
     params = {
-        "vs_currency":"usd",
-        "order":"market_cap_desc",
-        "per_page":300,
-        "page":1
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
     }
 
-    r = requests.get(url,params=params)
+    r = requests.get(API_URL, params=params, timeout=10)
 
-    return r.json()
+    data = r.json()
 
-# ===============================
-# DETECTAR PUMP
-# ===============================
+    candles = []
 
-def pump_detector(volume,marketcap):
+    for c in data:
+        candles.append({
+            "open": float(c[1]),
+            "close": float(c[4]),
+            "high": float(c[2]),
+            "low": float(c[3]),
+            "volume": float(c[5])
+        })
 
-    if marketcap == 0:
+    return candles
+
+
+# ------------------------------
+# ANTI FAKE FILTER
+# ------------------------------
+
+def anti_fake(candles):
+
+    closes = [c["close"] for c in candles]
+
+    avg = sum(closes)/len(closes)
+
+    last = closes[-1]
+
+    if abs(last-avg)/avg > 0.03:
         return False
 
-    if volume > marketcap * 0.08:
-        return True
+    return True
 
-    return False
 
-# ===============================
-# ANALISE
-# ===============================
+# ------------------------------
+# SIGNAL LOGIC
+# ------------------------------
 
-def analyze_coin(coin):
+def analyze(symbol):
 
-    prob = 50
+    candles = get_candles(symbol)
 
-    change = coin.get("price_change_percentage_24h",0)
-    volume = coin.get("total_volume",0)
-    marketcap = coin.get("market_cap",1)
+    if not candles:
+        return None
 
-    if change > 5:
-        prob += 15
+    if not anti_fake(candles):
+        return None
 
-    if change < -5:
-        prob += 15
+    last = candles[-1]
+    prev = candles[-2]
 
-    if pump_detector(volume,marketcap):
-        prob += 20
+    direction = None
 
-    direction = "COMPRA" if change < 0 else "VENDA"
+    if last["close"] > prev["close"]:
+        direction = "CALL"
+
+    if last["close"] < prev["close"]:
+        direction = "PUT"
+
+    if not direction:
+        return None
+
+    timeframe = random.choice(["1m","3m","5m"])
 
     return {
-        "symbol":coin["symbol"].upper(),
-        "prob":prob,
-        "dir":direction
+        "symbol":symbol,
+        "direction":direction,
+        "timeframe":timeframe
     }
 
-# ===============================
-# RANKING
-# ===============================
 
-def ranking():
+# ------------------------------
+# ASIAN SESSION RADAR
+# ------------------------------
 
-    markets = get_markets()
+def asian_session():
+
+    hour = datetime.utcnow().hour
+
+    return hour >= 23 or hour <= 6
+
+
+# ------------------------------
+# SCANNER
+# ------------------------------
+
+def scan():
 
     signals = []
 
-    for coin in markets:
+    for coin in SCAN_COINS:
 
         try:
 
-            s = analyze_coin(coin)
+            result = analyze(coin)
 
-            if s["prob"] >= 75:
-                signals.append(s)
+            if result:
+                signals.append(result)
 
         except:
             pass
 
-    signals = sorted(signals,key=lambda x:x["prob"],reverse=True)
+    return signals
 
-    return signals[:3]
 
-# ===============================
-# TEMPO DE ENTRADA
-# ===============================
+# ------------------------------
+# TELEGRAM
+# ------------------------------
 
-def entry_time():
+def start(update, context):
 
-    now = datetime.utcnow()
+    update.message.reply_text(
+        "🤖 BOT RADAR ULTRA ATIVO"
+    )
 
-    wait = random.randint(5,8)
 
-    entry = now + timedelta(minutes=wait)
+def status(update, context):
 
-    candle = random.choice(["1m","3m","5m","10m"])
+    update.message.reply_text(
+        "📡 Scanner rodando..."
+    )
 
-    return now, entry, candle
 
-# ===============================
-# ENVIAR SINAL
-# ===============================
+# ------------------------------
+# MAIN LOOP
+# ------------------------------
 
-def send_signal():
+def radar(context):
 
-    if not bot_active:
-        print("Bot desligado")
+    if not CHAT_ID:
         return
 
-    asian_market()
+    print("🔎 Escaneando mercado...")
 
-    top = ranking()
+    signals = scan()
 
-    if not top:
-        print("Sem sinais fortes")
+    if not signals:
         return
 
-    now, entry, candle = entry_time()
+    for s in signals:
 
-    msg = "📡 RADAR PROFISSIONAL\n\n"
+        msg = f"""
+🚨 SINAL DETECTADO
 
-    msg += f"⏱ Análise: {now.strftime('%H:%M')}\n"
-    msg += f"🎯 Entrada: {entry.strftime('%H:%M')}\n\n"
+MOEDA: {s['symbol']}
+DIREÇÃO: {s['direction']}
+TEMPO: {s['timeframe']}
 
-    for s in top:
-
-        msg += f"""
-Moeda: {s['symbol']}
-Direção: {s['dir']}
-Candle: {candle}
-Probabilidade: {s['prob']}%
+Sessão Asiática: {"SIM" if asian_session() else "NÃO"}
 """
 
-    bot.send_message(chat_id=CHAT_ID,text=msg)
+        context.bot.send_message(
+            chat_id=CHAT_ID,
+            text=msg
+        )
 
-# ===============================
-# LOOP
-# ===============================
 
-def loop():
-
-    while True:
-
-        print("🔎 Escaneando mercado")
-
-        try:
-
-            send_signal()
-
-        except Exception as e:
-
-            print("Erro:",e)
-
-        time.sleep(300)
-
-# ===============================
-# TELEGRAM
-# ===============================
+# ------------------------------
+# START BOT
+# ------------------------------
 
 updater = Updater(TOKEN)
 
 dp = updater.dispatcher
 
-dp.add_handler(CommandHandler("ligar",ligar))
-dp.add_handler(CommandHandler("desligar",desligar))
-dp.add_handler(CommandHandler("status",status))
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("status", status))
+
+job = updater.job_queue
+job.run_repeating(radar, interval=60, first=10)
+
+print("✅ BOT ONLINE")
 
 updater.start_polling()
-
-loop()
+updater.idle()
