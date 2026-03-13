@@ -8,10 +8,13 @@ from telegram.ext import Updater, CommandHandler, CallbackContext
 print("🚀 BOT RADAR ULTRA INICIADO")
 
 import os
+from telegram.ext import Updater, CommandHandler
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-bot = Bot(token=TOKEN)
+if not TOKEN:
+    print("TOKEN NÃO ENCONTRADO")
+    exit()
 
 bot_active = False
 
