@@ -421,11 +421,17 @@ WINRATE: {winrate}%
 
 
 updater = Updater(TOKEN, use_context=True)
-dispatcher = updater.dispatcher
 
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(CommandHandler("painel", painel))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar_moeda))
+dp = updater.dispatcher
+
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("painel", painel))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar_moeda))
+
+job_queue = updater.job_queue
+job_queue.run_repeating(radar, interval=60, first=10)
+
+print("✅ BOT ATIVO")
 
 updater.start_polling()
 updater.idle()
