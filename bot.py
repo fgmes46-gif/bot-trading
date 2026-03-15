@@ -306,6 +306,6 @@ job_queue.run_repeating(radar_asia,interval=300,first=20)
 
 print("✅ BOT ATIVO")
 
-updater.start_polling()
+updater.start_polling(drop_pending_updates=True)
 
 updater.idle()
