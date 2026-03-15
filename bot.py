@@ -433,6 +433,6 @@ job_queue.run_repeating(radar, interval=60, first=10)
 
 print("✅ BOT ATIVO")
 
-updater.start_polling()
+updater.start_polling(drop_pending_updates=True)
 updater.idle()
 
