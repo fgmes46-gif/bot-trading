@@ -5,10 +5,13 @@ import json
 from datetime import datetime
 from telegram.ext import Updater, CommandHandler
 
+import os
+
 print("🚀 RADAR FAMÍLIA INICIANDO")
 
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
 
 API_URL = "https://api.binance.com/api/v3/klines"
 
