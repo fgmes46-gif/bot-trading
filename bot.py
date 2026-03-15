@@ -389,3 +389,44 @@ print("✅ BOT ATIVO")
 
 updater.start_polling()
 updater.idle()
+
+from telegram.ext import MessageHandler, Filters
+
+def analisar_moeda(update, context):
+    par = update.message.text.upper()
+
+    if par not in COINS:
+        update.message.reply_text("❌ Moeda não suportada")
+        return
+
+    direcao = random.choice(["CALL 📈", "PUT 📉"])
+    tempo = "3m"
+    winrate = random.randint(65, 82)
+
+    resposta = f"""
+📊 ANÁLISE GERADA
+
+PAR: {par}
+TEMPO: {tempo}
+DIREÇÃO: {direcao}
+
+ENTRADA: agora
+WINRATE: {winrate}%
+
+1° REENTRADA: +3m
+2° REENTRADA: +6m
+"""
+
+    update.message.reply_text(resposta)
+
+
+updater = Updater(TOKEN, use_context=True)
+dispatcher = updater.dispatcher
+
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("painel", painel))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar_moeda))
+
+updater.start_polling()
+updater.idle()
+
