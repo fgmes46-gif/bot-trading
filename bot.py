@@ -1,6 +1,5 @@
 import os
 import requests
-import statistics
 from datetime import datetime
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
@@ -24,105 +23,109 @@ COINS = [
 
 def get_candles(symbol):
 
-    url=f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
 
-    data=requests.get(url).json()
+    data = requests.get(url).json()
 
-    closes=[float(c[4]) for c in data]
+    closes = [float(c[4]) for c in data]
 
-    volumes=[float(c[5]) for c in data]
+    volumes = [float(c[5]) for c in data]
 
-    return closes,volumes
+    return closes, volumes
+
 
 # -----------------------------
-# CALCULAR RSI REAL
+# RSI REAL
 # -----------------------------
 
 def calcular_rsi(closes):
 
-    ganhos=[]
-    perdas=[]
+    ganhos = []
+    perdas = []
 
-    for i in range(1,len(closes)):
+    for i in range(1, len(closes)):
 
-        diff=closes[i]-closes[i-1]
+        diff = closes[i] - closes[i-1]
 
-        if diff>0:
+        if diff > 0:
             ganhos.append(diff)
         else:
             perdas.append(abs(diff))
 
-    media_ganho=sum(ganhos)/len(ganhos) if ganhos else 0
-    media_perda=sum(perdas)/len(perdas) if perdas else 1
+    media_ganho = sum(ganhos)/len(ganhos) if ganhos else 0
+    media_perda = sum(perdas)/len(perdas) if perdas else 1
 
-    rs=media_ganho/media_perda
+    rs = media_ganho / media_perda
 
-    rsi=100-(100/(1+rs))
+    rsi = 100 - (100/(1+rs))
 
     return round(rsi,2)
 
+
 # -----------------------------
-# DETECTOR PUMP / DUMP
+# DETECTAR PUMP/DUMP
 # -----------------------------
 
 def detectar_movimento(closes):
 
-    variacao=((closes[-1]-closes[-5])/closes[-5])*100
+    variacao = ((closes[-1] - closes[-5]) / closes[-5]) * 100
 
-    if variacao>1.2:
+    if variacao > 1.2:
         return "PUMP 📈"
 
-    if variacao<-1.2:
+    if variacao < -1.2:
         return "DUMP 📉"
 
     return "NEUTRO"
+
 
 # -----------------------------
 # CALCULAR PROBABILIDADE
 # -----------------------------
 
-def calcular_probabilidade(rsi,movimento):
+def calcular_probabilidade(rsi, movimento):
 
-    prob=60
+    prob = 60
 
-    if rsi<30:
-        prob+=15
+    if rsi < 30:
+        prob += 15
 
-    if rsi>70:
-        prob+=15
+    if rsi > 70:
+        prob += 15
 
-    if movimento=="PUMP 📈":
-        prob+=5
+    if movimento == "PUMP 📈":
+        prob += 5
 
-    if movimento=="DUMP 📉":
-        prob+=5
+    if movimento == "DUMP 📉":
+        prob += 5
 
     return min(prob,90)
+
 
 # -----------------------------
 # ANALISAR MOEDA
 # -----------------------------
 
-def analisar(update,context):
+def analisar(update, context):
 
-    par=update.message.text.upper()
+    par = update.message.text.upper()
 
     if par not in COINS:
 
         update.message.reply_text("❌ moeda não suportada")
         return
 
-    closes,volumes=get_candles(par)
+    closes, volumes = get_candles(par)
 
-    rsi=calcular_rsi(closes)
+    rsi = calcular_rsi(closes)
 
-    movimento=detectar_movimento(closes)
+    movimento = detectar_movimento(closes)
 
-    direcao="CALL 📈" if rsi<50 else "PUT 📉"
+    direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
 
-    prob=calcular_probabilidade(rsi,movimento)
+    prob = calcular_probabilidade(rsi, movimento)
 
-    msg=f"""
+    msg = f"""
 📊 ANÁLISE SNIPER
 
 PAR: {par}
@@ -145,31 +148,71 @@ PROBABILIDADE: {prob}%
 
     update.message.reply_text(msg)
 
+
 # -----------------------------
-# RANKING MOEDAS
+# RANKING
 # -----------------------------
 
-def ranking(update,context):
+def ranking(update, context):
 
-    ranking_lista=[]
+    ranking_lista = []
 
     for coin in COINS:
 
-        closes,_=get_candles(coin)
+        closes,_ = get_candles(coin)
 
-        rsi=calcular_rsi(closes)
+        rsi = calcular_rsi(closes)
 
         ranking_lista.append((coin,rsi))
 
-    ranking_lista.sort(key=lambda x:x[1])
+    ranking_lista.sort(key=lambda x: x[1])
 
-    msg="🔥 MOEDAS MAIS FORTES\n\n"
+    msg = "🏆 RANKING DE FORÇA\n\n"
 
     for coin,rsi in ranking_lista:
 
-        msg+=f"{coin}  RSI:{rsi}\n"
+        msg += f"{coin}  RSI:{rsi}\n"
 
     update.message.reply_text(msg)
+
+
+# -----------------------------
+# SCANNER
+# -----------------------------
+
+def scan(update, context):
+
+    sinais = []
+
+    for coin in COINS:
+
+        closes,_ = get_candles(coin)
+
+        rsi = calcular_rsi(closes)
+
+        movimento = detectar_movimento(closes)
+
+        prob = calcular_probabilidade(rsi, movimento)
+
+        if prob >= 70:
+
+            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
+
+            sinais.append(f"{coin} {direcao} {prob}%")
+
+    if not sinais:
+
+        update.message.reply_text("📊 mercado neutro")
+        return
+
+    msg = "🔥 OPORTUNIDADES\n\n"
+
+    for s in sinais:
+
+        msg += s + "\n"
+
+    update.message.reply_text(msg)
+
 
 # -----------------------------
 # RADAR AUTOMÁTICO
@@ -179,20 +222,20 @@ def radar(context):
 
     for coin in COINS:
 
-        closes,_=get_candles(coin)
+        closes,_ = get_candles(coin)
 
-        rsi=calcular_rsi(closes)
+        rsi = calcular_rsi(closes)
 
-        movimento=detectar_movimento(closes)
+        movimento = detectar_movimento(closes)
 
-        prob=calcular_probabilidade(rsi,movimento)
+        prob = calcular_probabilidade(rsi, movimento)
 
-        if prob>=75:
+        if prob >= 75:
 
-            direcao="CALL 📈" if rsi<50 else "PUT 📉"
+            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
 
-            msg=f"""
-🚨 RADAR SNIPER
+            msg = f"""
+🚨 RADAR AUTOMÁTICO
 
 PAR: {coin}
 
@@ -209,27 +252,14 @@ TEMPO: 1m
 
             context.bot.send_message(chat_id=CHAT_ID,text=msg)
 
-# -----------------------------
-# SESSÃO ASIÁTICA
-# -----------------------------
-
-ASIA_HOURS=[22,23,0,1,2]
-
-def radar_asia(context):
-
-    agora=datetime.now()
-
-    if agora.hour in ASIA_HOURS:
-
-        radar(context)
 
 # -----------------------------
-# COMANDOS
+# START
 # -----------------------------
 
-def start(update,context):
+def start(update, context):
 
-    msg="""
+    msg = """
 🤖 RADAR FAMÍLIA PRO
 
 Comandos:
@@ -247,62 +277,24 @@ SOLUSDT
 
     update.message.reply_text(msg)
 
-# -----------------------------
-# SCAN MERCADO
-# -----------------------------
-
-def scan(update,context):
-
-    sinais=[]
-
-    for coin in COINS:
-
-        closes,_=get_candles(coin)
-
-        rsi=calcular_rsi(closes)
-
-        movimento=detectar_movimento(closes)
-
-        prob=calcular_probabilidade(rsi,movimento)
-
-        if prob>=70:
-
-            direcao="CALL 📈" if rsi<50 else "PUT 📉"
-
-            sinais.append(f"{coin} {direcao} {prob}%")
-
-    if not sinais:
-
-        update.message.reply_text("📊 mercado neutro")
-        return
-
-    msg="🔥 OPORTUNIDADES\n\n"
-
-    for s in sinais:
-
-        msg+=s+"\n"
-
-    update.message.reply_text(msg)
 
 # -----------------------------
-# START BOT
+# BOT START
 # -----------------------------
 
-updater=Updater(TOKEN,use_context=True)
+updater = Updater(TOKEN, use_context=True)
 
-dp=updater.dispatcher
+dp = updater.dispatcher
 
-dp.add_handler(CommandHandler("start",start))
-dp.add_handler(CommandHandler("scan",scan))
-dp.add_handler(CommandHandler("ranking",ranking))
+dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("scan", scan))
+dp.add_handler(CommandHandler("ranking", ranking))
 
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command,analisar))
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar))
 
-job_queue=updater.job_queue
+job_queue = updater.job_queue
 
-job_queue.run_repeating(radar,interval=600,first=20)
-
-job_queue.run_repeating(radar_asia,interval=300,first=20)
+job_queue.run_repeating(radar, interval=600, first=20)
 
 print("✅ BOT ATIVO")
 
