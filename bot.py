@@ -74,6 +74,9 @@ def calcular_rsi(closes):
 
 def detectar_movimento(closes):
 
+    if len(closes) < 6:
+        return "NEUTRO"
+
     variacao = ((closes[-1] - closes[-5]) / closes[-5]) * 100
 
     if variacao > 1.2:
