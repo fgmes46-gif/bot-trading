@@ -74,19 +74,30 @@ def calcular_rsi(closes):
 
 def detectar_movimento(closes):
 
-    # proteção contra lista pequena
-    if not closes or len(closes) < 6:
+    # proteção forte contra erro
+    if not closes:
+        return "NEUTRO"
+
+    if len(closes) < 6:
         return "NEUTRO"
 
     try:
-        variacao = ((closes[-1] - closes[-5]) / closes[-5]) * 100
-    except:
+        base = closes[-5]
+
+        # evita divisão por zero
+        if base == 0:
+            return "NEUTRO"
+
+        variacao = ((closes[-1] - base) / base) * 100
+
+    except Exception as e:
+        print("Erro detectar_movimento:", e)
         return "NEUTRO"
 
     if variacao > 1.2:
         return "PUMP 📈"
 
-    if variacao < -1.2:
+    elif variacao < -1.2:
         return "DUMP 📉"
 
     return "NEUTRO"
