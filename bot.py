@@ -180,7 +180,7 @@ Você está vendo apenas 20% do que o bot faz.
 - Radar automático
 - Alta precisão
 
-💰 VALOR HOJE: R$29
+💰 VALOR HOJE: R$169
 
 👉 Fale comigo: @JrGmes_bot
 """
