@@ -199,6 +199,76 @@ def analisar_sniper(par):
 
     return direcao,prob
 
+# -----------------------------
+# SNIPER PROGRAMADO (2x por hora)
+# -----------------------------
+
+def sniper_programado(context):
+
+    sinais = []
+
+    for coin in COINS:
+
+        closes,_ = get_candles(coin)
+
+        if not closes:
+            continue
+
+        rsi = calcular_rsi(closes)
+        movimento = detectar_movimento(closes)
+        prob = calcular_probabilidade(rsi, movimento)
+
+        if prob >= 75:
+
+            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
+
+            sinais.append({
+                "coin": coin,
+                "prob": prob,
+                "direcao": direcao,
+                "rsi": rsi,
+                "movimento": movimento
+            })
+
+    # Ordena pelos melhores
+    sinais.sort(key=lambda x: x["prob"], reverse=True)
+
+    # Pega só os 2 melhores
+    melhores = sinais[:2]
+
+    if not melhores:
+        return
+
+    from datetime import datetime, timedelta
+
+    agora = datetime.now()
+
+    for sinal in melhores:
+
+        entrada = agora + timedelta(minutes=1)
+        r1 = entrada + timedelta(minutes=1)
+        r2 = entrada + timedelta(minutes=2)
+
+        msg = f"""
+🚨 ALERTA SNIPER AUTOMÁTICO
+
+PAR: {sinal['coin']}
+
+DIREÇÃO: {sinal['direcao']}
+PROBABILIDADE: {sinal['prob']}%
+
+RSI: {sinal['rsi']}
+MOVIMENTO: {sinal['movimento']}
+
+⏰ Entrada: {entrada.strftime('%H:%M')}
+1ª: {r1.strftime('%H:%M')}
+2ª: {r2.strftime('%H:%M')}
+
+🧠 Arquiteto
+"""
+
+        context.bot.send_message(chat_id=CHAT_ID, text=msg)
+
 # =========================
 # HORÁRIOS TRADE
 # =========================
@@ -266,6 +336,21 @@ dp.add_handler(CommandHandler("stats", stats))
 dp.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar))
 
 print("✅ ARQUITETO PRO ONLINE")
+
+print("🚀 Iniciando bot...")
+
+job_queue = updater.job_queue
+
+print("📡 Ativando radar...")
+job_queue.run_repeating(radar, interval=600, first=20)
+
+print("🎯 Ativando sniper programado...")
+job_queue.run_repeating(sniper_programado, interval=1800, first=30)
+
+print("✅ ARQUITETO PRO ONLINE")
+
+updater.start_polling()
+updater.idle()
 
 updater.start_polling()
 updater.idle()
