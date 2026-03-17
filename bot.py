@@ -269,6 +269,39 @@ MOVIMENTO: {sinal['movimento']}
 
         context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
+def radar(context):
+
+    for coin in COINS:
+
+        closes,_ = get_candles(coin)
+
+        if not closes:
+            continue
+
+        rsi = calcular_rsi(closes)
+        movimento = detectar_movimento(closes)
+        prob = calcular_probabilidade(rsi, movimento)
+
+        if prob >= 75:
+
+            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
+
+            msg = f"""
+🚨 RADAR AUTOMÁTICO
+
+PAR: {coin}
+
+RSI: {rsi}
+MOVIMENTO: {movimento}
+
+DIREÇÃO: {direcao}
+PROBABILIDADE: {prob}%
+
+⏰ Tempo: 1m
+"""
+
+            context.bot.send_message(chat_id=CHAT_ID, text=msg)
+
 # =========================
 # HORÁRIOS TRADE
 # =========================
