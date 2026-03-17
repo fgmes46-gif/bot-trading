@@ -241,7 +241,9 @@ def sniper_programado(context):
         movimento = detectar_movimento(closes)
         prob = calcular_probabilidade(rsi, movimento)
 
-        if prob >= 75:
+        print(f"{coin} | RSI: {rsi} | Prob: {prob} | Mov: {movimento}")
+
+        if prob >= 70:
 
             direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
 
@@ -305,7 +307,7 @@ def radar(context):
         movimento = detectar_movimento(closes)
         prob = calcular_probabilidade(rsi, movimento)
 
-        if prob >= 75:
+        if prob >= 70:
 
             direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
 
@@ -401,7 +403,7 @@ print("📡 Ativando radar...")
 job_queue.run_repeating(radar, interval=600, first=20)
 
 print("🎯 Ativando sniper programado...")
-job_queue.run_repeating(sniper_programado, interval=1800, first=30)
+job_queue.run_repeating(sniper_programado, interval=60, first=10)
 
 print("✅ ARQUITETO PRO ONLINE")
 
