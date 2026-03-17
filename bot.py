@@ -1,327 +1,255 @@
 import os
 import requests
+import logging
 from datetime import datetime
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
-print("🚀 RADAR FAMÍLIA PRO INICIANDO")
+print("🚀 SNIPER MÁXIMO INICIANDO...")
 
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-COINS = [
-"BTCUSDT",
-"ETHUSDT",
-"SOLUSDT",
-"ADAUSDT",
-"XRPUSDT",
-"BNBUSDT"
-]
+COINS = ["BTCUSDT","ETHUSDT","SOLUSDT","ADAUSDT","XRPUSDT","BNBUSDT"]
 
-# -----------------------------
-# PEGAR CANDLES BINANCE
-# -----------------------------
+logging.basicConfig(level=logging.INFO)
 
+# =========================
+# BINANCE DATA
+# =========================
 def get_candles(symbol):
-
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
-
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
     try:
-        data = requests.get(url).json()
-
-        if not isinstance(data, list):
-            return [], []
-
-        closes = [float(c[4]) for c in data if len(c) > 4]
-        volumes = [float(c[5]) for c in data if len(c) > 5]
-
-        return closes, volumes
-
+        data = requests.get(url, timeout=5).json()
+        closes = [float(c[4]) for c in data]
+        return closes
     except:
-        return [], []
+        return []
 
-
-# -----------------------------
-# RSI REAL
-# -----------------------------
-
-def calcular_rsi(closes):
+# =========================
+# RSI (MELHORADO)
+# =========================
+def calcular_rsi(closes, period=14):
+    if len(closes) < period:
+        return 50
 
     ganhos = []
     perdas = []
 
     for i in range(1, len(closes)):
-
         diff = closes[i] - closes[i-1]
+        ganhos.append(max(diff, 0))
+        perdas.append(abs(min(diff, 0)))
 
-        if diff > 0:
-            ganhos.append(diff)
-        else:
-            perdas.append(abs(diff))
+    avg_gain = sum(ganhos[-period:]) / period
+    avg_loss = sum(perdas[-period:]) / period
 
-    media_ganho = sum(ganhos)/len(ganhos) if ganhos else 0
-    media_perda = sum(perdas)/len(perdas) if perdas else 1
+    if avg_loss == 0:
+        return 100
 
-    rs = media_ganho / media_perda
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
 
-    rsi = 100 - (100/(1+rs))
+# =========================
+# EMA
+# =========================
+def calcular_ema(closes, period=21):
+    if len(closes) < period:
+        return closes[-1]
 
-    return round(rsi,2)
+    k = 2 / (period + 1)
+    ema = closes[0]
 
+    for price in closes:
+        ema = price * k + ema * (1 - k)
 
-# -----------------------------
-# DETECTAR PUMP/DUMP
-# -----------------------------
+    return ema
 
+# =========================
+# MOVIMENTO
+# =========================
 def detectar_movimento(closes):
-
-    # proteção forte contra erro
-    if not closes:
+    if len(closes) < 10:
         return "NEUTRO"
 
-    if len(closes) < 6:
+    base = closes[-6]
+    atual = closes[-1]
+
+    if base == 0:
         return "NEUTRO"
 
-    try:
-        base = closes[-5]
+    variacao = ((atual - base) / base) * 100
 
-        # evita divisão por zero
-        if base == 0:
-            return "NEUTRO"
-
-        variacao = ((closes[-1] - base) / base) * 100
-
-    except Exception as e:
-        print("Erro detectar_movimento:", e)
-        return "NEUTRO"
-
-    if variacao > 1.2:
+    if variacao > 1:
         return "PUMP 📈"
-
-    elif variacao < -1.2:
+    elif variacao < -1:
         return "DUMP 📉"
-
     return "NEUTRO"
 
+# =========================
+# LÓGICA SNIPER
+# =========================
+def analisar_sniper(closes):
+    rsi = calcular_rsi(closes)
+    ema = calcular_ema(closes)
+    movimento = detectar_movimento(closes)
 
-# -----------------------------
-# CALCULAR PROBABILIDADE
-# -----------------------------
+    preco = closes[-1]
 
-def calcular_probabilidade(rsi, movimento):
+    direcao = "NEUTRO"
+    tendencia = preco > ema
 
-    prob = 60
+    # SNIPER ENTRY
+    if preco > ema and rsi < 35:
+        direcao = "CALL 📈"
+    elif preco < ema and rsi > 65:
+        direcao = "PUT 📉"
 
-    if rsi < 30:
-        prob += 15
+    # PROBABILIDADE REAL
+    prob = 50
 
-    if rsi > 70:
-        prob += 15
+    if rsi < 30 or rsi > 70:
+        prob += 20
 
-    if movimento == "PUMP 📈":
-        prob += 5
+    if movimento != "NEUTRO":
+        prob += 10
 
-    if movimento == "DUMP 📉":
-        prob += 5
+    if tendencia:
+        prob += 10
 
-    return min(prob,90)
+    prob = min(prob, 95)
 
+    return rsi, ema, movimento, direcao, prob
 
-# -----------------------------
-# ANALISAR MOEDA
-# -----------------------------
-
+# =========================
+# COMANDO ANALISAR
+# =========================
 def analisar(update, context):
-
     par = update.message.text.upper()
 
     if par not in COINS:
-
-        update.message.reply_text("❌ moeda não suportada")
+        update.message.reply_text("❌ Par não suportado")
         return
 
-    closes, volumes = get_candles(par)
+    closes = get_candles(par)
 
-    rsi = calcular_rsi(closes)
+    if not closes:
+        update.message.reply_text("Erro ao pegar dados")
+        return
 
-    movimento = detectar_movimento(closes)
+    rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
 
-    direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
-
-    prob = calcular_probabilidade(rsi, movimento)
+    if direcao == "NEUTRO":
+        update.message.reply_text("📊 Mercado sem entrada segura")
+        return
 
     msg = f"""
-📊 ANÁLISE SNIPER
+🎯 SNIPER MÁXIMO
 
 PAR: {par}
 
 RSI: {rsi}
+EMA: {round(ema,2)}
 
 MOVIMENTO: {movimento}
 
 DIREÇÃO: {direcao}
 
-TEMPO: 1m
-
-ENTRADA: próxima vela
-
 PROBABILIDADE: {prob}%
 
-1° REENTRADA: +1m
-2° REENTRADA: +2m
+ENTRADA: próxima vela
+TEMPO: 1m
+
+REENTRADAS:
+1° +1m
+2° +2m
 """
 
     update.message.reply_text(msg)
 
-
-# -----------------------------
-# RANKING
-# -----------------------------
-
-def ranking(update, context):
-
-    ranking_lista = []
-
-    for coin in COINS:
-
-        closes,_ = get_candles(coin)
-
-        rsi = calcular_rsi(closes)
-
-        ranking_lista.append((coin,rsi))
-
-    ranking_lista.sort(key=lambda x: x[1])
-
-    msg = "🏆 RANKING DE FORÇA\n\n"
-
-    for coin,rsi in ranking_lista:
-
-        msg += f"{coin}  RSI:{rsi}\n"
-
-    update.message.reply_text(msg)
-
-
-# -----------------------------
-# SCANNER
-# -----------------------------
-
+# =========================
+# SCAN
+# =========================
 def scan(update, context):
-
     sinais = []
 
     for coin in COINS:
+        closes = get_candles(coin)
+        if not closes:
+            continue
 
-        closes,_ = get_candles(coin)
+        rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
 
-        rsi = calcular_rsi(closes)
-
-        movimento = detectar_movimento(closes)
-
-        prob = calcular_probabilidade(rsi, movimento)
-
-        if prob >= 70:
-
-            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
-
+        if prob >= 80 and direcao != "NEUTRO":
             sinais.append(f"{coin} {direcao} {prob}%")
 
     if not sinais:
-
-        update.message.reply_text("📊 mercado neutro")
+        update.message.reply_text("📊 Mercado lateral")
         return
 
-    msg = "🔥 OPORTUNIDADES\n\n"
-
-    for s in sinais:
-
-        msg += s + "\n"
+    msg = "🔥 OPORTUNIDADES SNIPER\n\n"
+    msg += "\n".join(sinais)
 
     update.message.reply_text(msg)
 
-
-# -----------------------------
+# =========================
 # RADAR AUTOMÁTICO
-# -----------------------------
-
+# =========================
 def radar(context):
-
     for coin in COINS:
+        closes = get_candles(coin)
+        if not closes:
+            continue
 
-        closes,_ = get_candles(coin)
+        rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
 
-        rsi = calcular_rsi(closes)
-
-        movimento = detectar_movimento(closes)
-
-        prob = calcular_probabilidade(rsi, movimento)
-
-        if prob >= 75:
-
-            direcao = "CALL 📈" if rsi < 50 else "PUT 📉"
-
+        if prob >= 85 and direcao != "NEUTRO":
             msg = f"""
-🚨 RADAR AUTOMÁTICO
+🚨 ALERTA SNIPER
 
 PAR: {coin}
 
 RSI: {rsi}
+EMA: {round(ema,2)}
 
 MOVIMENTO: {movimento}
 
 DIREÇÃO: {direcao}
 
 PROBABILIDADE: {prob}%
-
 TEMPO: 1m
 """
 
-            context.bot.send_message(chat_id=CHAT_ID,text=msg)
+            context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-
-# -----------------------------
+# =========================
 # START
-# -----------------------------
-
+# =========================
 def start(update, context):
-
-    msg = """
-🤖 RADAR FAMÍLIA PRO
+    update.message.reply_text("""
+🤖 SNIPER MÁXIMO ATIVO
 
 Comandos:
-
-/ranking
 /scan
 
-Ou digite moeda
-
-Ex:
-
+Ou digite:
 BTCUSDT
-SOLUSDT
-"""
+ETHUSDT
+""")
 
-    update.message.reply_text(msg)
-
-
-# -----------------------------
-# BOT START
-# -----------------------------
-
+# =========================
+# BOT
+# =========================
 updater = Updater(TOKEN, use_context=True)
-
 dp = updater.dispatcher
 
 dp.add_handler(CommandHandler("start", start))
 dp.add_handler(CommandHandler("scan", scan))
-dp.add_handler(CommandHandler("ranking", ranking))
-
 dp.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar))
 
 job_queue = updater.job_queue
+job_queue.run_repeating(radar, interval=300, first=20)
 
-job_queue.run_repeating(radar, interval=600, first=20)
-
-print("✅ BOT ATIVO")
+print("✅ SNIPER ONLINE")
 
 updater.start_polling(drop_pending_updates=True)
-
 updater.idle()
