@@ -1,10 +1,10 @@
 import os
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
-print("🚀 SNIPER MÁXIMO INICIANDO...")
+print("🏦 SNIPER INSTITUCIONAL - ARQUITETO")
 
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO)
 # =========================
 # BINANCE DATA
 # =========================
-def get_candles(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
+def get_candles(symbol, interval="1m", limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         data = requests.get(url, timeout=5).json()
         closes = [float(c[4]) for c in data]
@@ -26,7 +26,7 @@ def get_candles(symbol):
         return []
 
 # =========================
-# RSI (MELHORADO)
+# RSI
 # =========================
 def calcular_rsi(closes, period=14):
     if len(closes) < period:
@@ -65,103 +65,155 @@ def calcular_ema(closes, period=21):
     return ema
 
 # =========================
-# MOVIMENTO
+# FORÇA DE TENDÊNCIA
 # =========================
-def detectar_movimento(closes):
+def forca_tendencia(closes):
     if len(closes) < 10:
-        return "NEUTRO"
+        return 0
 
-    base = closes[-6]
-    atual = closes[-1]
-
-    if base == 0:
-        return "NEUTRO"
-
-    variacao = ((atual - base) / base) * 100
-
-    if variacao > 1:
-        return "PUMP 📈"
-    elif variacao < -1:
-        return "DUMP 📉"
-    return "NEUTRO"
+    subida = sum([1 for i in range(-10, -1) if closes[i] > closes[i-1]])
+    return subida
 
 # =========================
-# LÓGICA SNIPER
+# HORÁRIOS (SNIPER)
 # =========================
-def analisar_sniper(closes):
-    rsi = calcular_rsi(closes)
-    ema = calcular_ema(closes)
-    movimento = detectar_movimento(closes)
+def gerar_horarios():
+    agora = datetime.now()
 
-    preco = closes[-1]
+    entrada = agora + timedelta(minutes=1)
+    r1 = entrada + timedelta(minutes=1)
+    r2 = entrada + timedelta(minutes=2)
+
+    return (
+        entrada.strftime("%H:%M"),
+        r1.strftime("%H:%M"),
+        r2.strftime("%H:%M")
+    )
+
+# =========================
+# LÓGICA INSTITUCIONAL
+# =========================
+def analisar_institucional(symbol):
+
+    closes_1m = get_candles(symbol, "1m")
+    closes_5m = get_candles(symbol, "5m")
+
+    if not closes_1m or not closes_5m:
+        return None
+
+    rsi_1m = calcular_rsi(closes_1m)
+    rsi_5m = calcular_rsi(closes_5m)
+
+    ema_1m = calcular_ema(closes_1m)
+    ema_5m = calcular_ema(closes_5m)
+
+    preco = closes_1m[-1]
+
+    tendencia_1m = preco > ema_1m
+    tendencia_5m = closes_5m[-1] > ema_5m
+
+    forca = forca_tendencia(closes_1m)
 
     direcao = "NEUTRO"
-    tendencia = preco > ema
 
-    # SNIPER ENTRY
-    if preco > ema and rsi < 35:
+    if tendencia_1m and tendencia_5m and rsi_1m < 35 and forca >= 6:
         direcao = "CALL 📈"
-    elif preco < ema and rsi > 65:
+
+    elif not tendencia_1m and not tendencia_5m and rsi_1m > 65 and forca <= 3:
         direcao = "PUT 📉"
 
-    # PROBABILIDADE REAL
-    prob = 50
+    if direcao == "NEUTRO":
+        return None
 
-    if rsi < 30 or rsi > 70:
-        prob += 20
+    prob = 60
 
-    if movimento != "NEUTRO":
+    if rsi_1m < 30 or rsi_1m > 70:
         prob += 10
 
-    if tendencia:
+    if rsi_5m < 40 or rsi_5m > 60:
         prob += 10
 
-    prob = min(prob, 95)
+    if tendencia_1m == tendencia_5m:
+        prob += 10
 
-    return rsi, ema, movimento, direcao, prob
+    if forca >= 7:
+        prob += 10
+
+    prob = min(prob, 97)
+
+    return {
+        "direcao": direcao,
+        "prob": prob,
+        "rsi": rsi_1m,
+        "forca": forca,
+        "ema": round(ema_1m,2)
+    }
 
 # =========================
-# COMANDO ANALISAR
+# VENDA AUTOMÁTICA
+# =========================
+def vender(update, context):
+    msg = """
+🚀 ACESSO VIP LIBERADO
+
+Você está vendo apenas 20% do que o bot faz.
+
+🔥 No VIP você recebe:
+- Sinais em tempo real
+- Radar automático
+- Alta precisão
+
+💰 VALOR HOJE: R$29
+
+👉 Fale comigo: @JrGmes_bot
+"""
+    update.message.reply_text(msg)
+
+# =========================
+# ANALISAR
 # =========================
 def analisar(update, context):
+    texto = update.message.text.lower()
+
+    # gatilho de venda
+    if any(p in texto for p in ["vip","plano","acesso","entrar"]):
+        vender(update, context)
+        return
+
     par = update.message.text.upper()
 
     if par not in COINS:
-        update.message.reply_text("❌ Par não suportado")
+        update.message.reply_text("❌ Par inválido")
         return
 
-    closes = get_candles(par)
+    dados = analisar_institucional(par)
 
-    if not closes:
-        update.message.reply_text("Erro ao pegar dados")
+    if not dados:
+        update.message.reply_text("📊 Sem entrada institucional")
         return
 
-    rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
+    entrada, r1, r2 = gerar_horarios()
 
-    if direcao == "NEUTRO":
-        update.message.reply_text("📊 Mercado sem entrada segura")
-        return
+    direcao_txt = "🟩 Compra (CALL)" if "CALL" in dados["direcao"] else "🟥 Venda (PUT)"
 
     msg = f"""
-🎯 SNIPER MÁXIMO
+⚠️ TRADE RÁPIDO
 
-PAR: {par}
+💵 {par}
+⏰ Expiração: 1 Minuto
 
-RSI: {rsi}
-EMA: {round(ema,2)}
+🛎️ Entrada: {entrada}
 
-MOVIMENTO: {movimento}
+{direcao_txt}
 
-DIREÇÃO: {direcao}
+📊 Probabilidade: {dados['prob']}%
 
-PROBABILIDADE: {prob}%
+1ª reentrada - {r1}
+2ª reentrada - {r2}
 
-ENTRADA: próxima vela
-TEMPO: 1m
+👉 Até 2 reentradas se necessário
 
-REENTRADAS:
-1° +1m
-2° +2m
+🧠 Arquiteto
 """
 
     update.message.reply_text(msg)
@@ -173,22 +225,16 @@ def scan(update, context):
     sinais = []
 
     for coin in COINS:
-        closes = get_candles(coin)
-        if not closes:
-            continue
+        dados = analisar_institucional(coin)
 
-        rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
-
-        if prob >= 80 and direcao != "NEUTRO":
-            sinais.append(f"{coin} {direcao} {prob}%")
+        if dados and dados["prob"] >= 85:
+            sinais.append(f"{coin} {dados['direcao']} {dados['prob']}%")
 
     if not sinais:
-        update.message.reply_text("📊 Mercado lateral")
+        update.message.reply_text("📊 Mercado sem oportunidade forte")
         return
 
-    msg = "🔥 OPORTUNIDADES SNIPER\n\n"
-    msg += "\n".join(sinais)
-
+    msg = "🏦 SCANNER INSTITUCIONAL\n\n" + "\n".join(sinais)
     update.message.reply_text(msg)
 
 # =========================
@@ -196,29 +242,28 @@ def scan(update, context):
 # =========================
 def radar(context):
     for coin in COINS:
-        closes = get_candles(coin)
-        if not closes:
-            continue
+        dados = analisar_institucional(coin)
 
-        rsi, ema, movimento, direcao, prob = analisar_sniper(closes)
+        if dados and dados["prob"] >= 90:
+            entrada, r1, r2 = gerar_horarios()
 
-        if prob >= 85 and direcao != "NEUTRO":
+            direcao_txt = "🟩 CALL" if "CALL" in dados["direcao"] else "🟥 PUT"
+
             msg = f"""
-🚨 ALERTA SNIPER
+🚨 ALERTA INSTITUCIONAL
 
 PAR: {coin}
 
-RSI: {rsi}
-EMA: {round(ema,2)}
+{direcao_txt}
+PROBABILIDADE: {dados['prob']}%
 
-MOVIMENTO: {movimento}
+⏰ Entrada: {entrada}
 
-DIREÇÃO: {direcao}
+1ª: {r1}
+2ª: {r2}
 
-PROBABILIDADE: {prob}%
-TEMPO: 1m
+🧠 Arquiteto
 """
-
             context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
 # =========================
@@ -226,18 +271,18 @@ TEMPO: 1m
 # =========================
 def start(update, context):
     update.message.reply_text("""
-🤖 SNIPER MÁXIMO ATIVO
+🏦 BOT INSTITUCIONAL ATIVO
 
 Comandos:
 /scan
 
-Ou digite:
+Digite:
 BTCUSDT
 ETHUSDT
 """)
 
 # =========================
-# BOT
+# BOT START
 # =========================
 updater = Updater(TOKEN, use_context=True)
 dp = updater.dispatcher
@@ -249,7 +294,7 @@ dp.add_handler(MessageHandler(Filters.text & ~Filters.command, analisar))
 job_queue = updater.job_queue
 job_queue.run_repeating(radar, interval=300, first=20)
 
-print("✅ SNIPER ONLINE")
+print("✅ BOT INSTITUCIONAL ONLINE")
 
 updater.start_polling(drop_pending_updates=True)
 updater.idle()
