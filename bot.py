@@ -17,12 +17,29 @@ logging.basicConfig(level=logging.INFO)
 # BINANCE DATA
 # =========================
 def get_candles(symbol, interval="1m", limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    
+    print(f"Buscando dados de {symbol}...")
+    
+    url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    
     try:
-        data = requests.get(url, timeout=5).json()
+        response = requests.get(url, timeout=10)
+
+        if response.status_code != 200:
+            print("Erro API:", response.status_code, response.text)
+            return []
+
+        data = response.json()
+
+        if not isinstance(data, list):
+            print("Resposta inválida:", data)
+            return []
+
         closes = [float(c[4]) for c in data]
         return closes
-    except:
+
+    except Exception as e:
+        print("Erro conexão:", e)
         return []
 
 # =========================
