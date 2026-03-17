@@ -186,6 +186,18 @@ def horario_ok():
 # =========================
 # SNIPER ADAPTATIVO
 # =========================
+
+def filtro_inteligente(prob):
+
+    if prob >= 80:
+        return "FORTE 💥"
+
+    elif prob >= 70:
+        return "BOA 🔥"
+
+    else:
+        return "FRACA ⚠️"
+
 def analisar_sniper(par):
 
     if not horario_ok():
@@ -225,6 +237,17 @@ def analisar_sniper(par):
 # -----------------------------
 # SNIPER PROGRAMADO (2x por hora)
 # -----------------------------
+
+def filtro_inteligente(prob):
+
+    if prob >= 80:
+        return "FORTE 💥"
+
+    elif prob >= 70:
+        return "BOA 🔥"
+
+    else:
+        return "FRACA ⚠️"
 
 def sniper_programado(context):
 
