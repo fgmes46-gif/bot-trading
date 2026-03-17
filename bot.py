@@ -12,6 +12,29 @@ CHAT_ID = os.getenv("CHAT_ID")
 COINS = ["BTCUSDT","ETHUSDT","SOLUSDT","ADAUSDT","XRPUSDT","BNBUSDT"]
 ARQUIVO = "historico.json"
 
+# -----------------------------
+# PEGAR DADOS BINANCE
+# -----------------------------
+
+def get_candles(symbol):
+
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
+
+    try:
+        data = requests.get(url).json()
+
+        if not isinstance(data, list):
+            return [], []
+
+        closes = [float(c[4]) for c in data if len(c) > 4]
+        volumes = [float(c[5]) for c in data if len(c) > 5]
+
+        return closes, volumes
+
+    except Exception as e:
+        print("Erro get_candles:", e)
+        return [], []
+
 # =========================
 # HISTÓRICO
 # =========================
