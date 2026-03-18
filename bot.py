@@ -1,170 +1,263 @@
 import os
-import requests
 import json
-from datetime import datetime, timedelta
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import requests
+from datetime import datetime
+from binance.client import Client
+from telegram.ext import Updater, CommandHandler
 
-print("🧠 ARQUITETO PRO - BOT ADAPTATIVO")
+print("🧠 ARQUITETO PRO 3.0")
 
+# =========================
+# CONFIG
+# =========================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-COINS = ["BTCUSDT","ETHUSDT","SOLUSDT","ADAUSDT","XRPUSDT","BNBUSDT"]
+API_KEY = os.getenv("BINANCE_KEY")
+API_SECRET = os.getenv("BINANCE_SECRET")
+
+client = Client(API_KEY, API_SECRET)
+
+COINS = ["BTCUSDT","ETHUSDT","SOLUSDT"]
+
 ARQUIVO = "historico.json"
 
+MODO_SIMULACAO = True
+BOT_ATIVO = False
+saldo_fake = 100
+
+ULTIMA_ENTRADA = {}
 
 # =========================
-# 📊 PEGAR DADOS BINANCE
+# TELEGRAM CONTROLE
+# =========================
+def ligar(update, context):
+    global BOT_ATIVO
+    BOT_ATIVO = True
+    update.message.reply_text("🟢 BOT LIGADO")
+
+def desligar(update, context):
+    global BOT_ATIVO
+    BOT_ATIVO = False
+    update.message.reply_text("🔴 BOT DESLIGADO")
+
+# =========================
+# DADOS
 # =========================
 def get_candles(symbol):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
-        data = requests.get(url).json()
-        closes = [float(c[4]) for c in data]
-        return closes
-    except:
-        return None
-
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
+    data = requests.get(url).json()
+    return [float(c[4]) for c in data]
 
 # =========================
-# 🧠 FILTRO INTELIGENTE
-# =========================
-def filtro_inteligente(prob):
-    if prob >= 80:
-        return "FORTE 💥"
-    elif prob >= 70:
-        return "BOA 🔥"
-    else:
-        return "FRACA ⚠️"
-
-
-# =========================
-# 📈 ANALISE SIMPLES
+# ANALISE INTELIGENTE
 # =========================
 def analisar(closes):
-    if not closes:
-        return None, 0
+    mm5 = sum(closes[-5:]) / 5
+    mm20 = sum(closes[-20:]) / 20
 
-    tendencia = "alta" if closes[-1] > closes[0] else "baixa"
-
-    variacao = abs(closes[-1] - closes[0])
-    prob = min(90, int(variacao * 1000))
-
-    return tendencia, prob
-
+    if mm5 > mm20:
+        return "BUY", 80
+    elif mm5 < mm20:
+        return "SELL", 80
+    return None, 0
 
 # =========================
-# 🎯 SNIPER PROGRAMADO
+# HISTÓRICO
 # =========================
-def sniper_programado(context):
+def carregar_historico():
+    try:
+        with open(ARQUIVO, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def salvar_resultado(resultado):
+    dados = carregar_historico()
+    dados.append(resultado)
+    with open(ARQUIVO, "w") as f:
+        json.dump(dados, f)
+
+# =========================
+# RISCO
+# =========================
+def get_balance():
+    if MODO_SIMULACAO:
+        return saldo_fake
+    try:
+        balance = client.get_asset_balance(asset='USDT')
+        return float(balance['free'])
+    except:
+        return 0
+
+def calcular_risco(historico):
+    if len(historico) < 5:
+        return 0.02
+
+    ultimos = historico[-5:]
+    if ultimos.count("LOSS") >= 3:
+        return 0.01
+    elif ultimos.count("WIN") >= 3:
+        return 0.03
+    return 0.02
+
+# =========================
+# ANTI-BURRICE 😂
+# =========================
+def pode_operar(coin):
+    agora = datetime.now()
+
+    if coin in ULTIMA_ENTRADA:
+        diff = (agora - ULTIMA_ENTRADA[coin]).seconds
+        if diff < 300:
+            return False
+
+    ULTIMA_ENTRADA[coin] = agora
+    return True
+
+# =========================
+# PROTEÇÃO
+# =========================
+def protecao(historico):
+    ultimos = historico[-10:]
+    if ultimos.count("LOSS") >= 6:
+        return False
+    return True
+
+# =========================
+# SIMULAÇÃO
+# =========================
+def simular_trade(symbol, direcao, valor):
+    global saldo_fake
+
+    closes = get_candles(symbol)
+    entrada = closes[-1]
+    saida = closes[-2]
+
+    if direcao == "BUY":
+        lucro = (saida - entrada) / entrada
+    else:
+        lucro = (entrada - saida) / entrada
+
+    resultado = valor * lucro
+    saldo_fake += resultado
+
+    if resultado > 0:
+        salvar_resultado("WIN")
+        status = "WIN 🟢"
+    else:
+        salvar_resultado("LOSS")
+        status = "LOSS 🔴"
+
+    return status, resultado, saldo_fake
+
+# =========================
+# EXECUÇÃO REAL
+# =========================
+def executar_ordem(symbol, side, valor):
+    try:
+        if side == "BUY":
+            return client.order_market_buy(symbol=symbol, quoteOrderQty=valor)
+        else:
+            return client.order_market_sell(symbol=symbol, quoteOrderQty=valor)
+    except Exception as e:
+        print("Erro:", e)
+        return None
+
+# =========================
+# BOT PRINCIPAL
+# =========================
+def rodar_bot(context):
+    global BOT_ATIVO
+
+    if not BOT_ATIVO:
+        return
+
+    historico = carregar_historico()
+
+    if not protecao(historico):
+        context.bot.send_message(chat_id=CHAT_ID, text="🛑 BOT EM PROTEÇÃO")
+        return
+
+    saldo = get_balance()
+
+    if saldo < 100:
+        context.bot.send_message(chat_id=CHAT_ID, text="⚠️ Saldo insuficiente (<100 USDT)")
+        return
+
+    risco = calcular_risco(historico)
+    valor_trade = saldo * risco
+
     for coin in COINS:
+        if not pode_operar(coin):
+            continue
+
         closes = get_candles(coin)
-        tendencia, prob = analisar(closes)
+        direcao, prob = analisar(closes)
 
-        if not tendencia:
+        if not direcao:
             continue
 
-        if prob < 70:
-            continue
+        if MODO_SIMULACAO:
+            status, lucro, saldo_fake_atual = simular_trade(coin, direcao, valor_trade)
 
-        direcao = "🟩 CALL" if tendencia == "alta" else "🟥 PUT"
-        nivel = filtro_inteligente(prob)
-
-        agora = datetime.now()
-        entrada = (agora + timedelta(minutes=1)).strftime("%H:%M")
-        g1 = (agora + timedelta(minutes=2)).strftime("%H:%M")
-        g2 = (agora + timedelta(minutes=3)).strftime("%H:%M")
-
-        mensagem = f"""
-🚨 ALERTA INSTITUCIONAL
+            msg = f"""
+🧪 SIMULAÇÃO
 
 PAR: {coin}
+TIPO: {direcao}
+RESULTADO: {status}
+LUCRO: {lucro:.2f}
 
-{direcao}
-PROBABILIDADE: {prob}%
-NÍVEL: {nivel}
+SALDO: {saldo_fake_atual:.2f}
+"""
+        else:
+            executar_ordem(coin, direcao, valor_trade)
+            msg = f"🚀 ORDEM REAL: {coin} {direcao}"
 
-⏰ Entrada: {entrada}
-1ª: {g1}
-2ª: {g2}
+        context.bot.send_message(chat_id=CHAT_ID, text=msg)
+
+# =========================
+# RELATÓRIO
+# =========================
+def relatorio(context):
+    historico = carregar_historico()
+    wins = historico.count("WIN")
+    loss = historico.count("LOSS")
+
+    msg = f"""
+📊 RELATÓRIO
+
+WIN: {wins}
+LOSS: {loss}
+TOTAL: {len(historico)}
 
 🧠 Arquiteto
 """
-
-        context.bot.send_message(chat_id=CHAT_ID, text=mensagem)
-
+    context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
 # =========================
-# ⚡ SNIPER ADAPTATIVO
-# =========================
-def sniper_adaptativo(context):
-    for coin in COINS:
-        closes = get_candles(coin)
-        tendencia, prob = analisar(closes)
-
-        if not tendencia:
-            continue
-
-        if prob < 70:
-            continue
-
-        direcao = "🟩 CALL" if tendencia == "alta" else "🟥 PUT"
-        nivel = filtro_inteligente(prob)
-
-        agora = datetime.now()
-        entrada = (agora + timedelta(minutes=1)).strftime("%H:%M")
-        g1 = (agora + timedelta(minutes=2)).strftime("%H:%M")
-        g2 = (agora + timedelta(minutes=3)).strftime("%H:%M")
-
-        mensagem = f"""
-🚨 ALERTA ADAPTATIVO
-
-PAR: {coin}
-
-{direcao}
-PROBABILIDADE: {prob}%
-NÍVEL: {nivel}
-
-⏰ Entrada: {entrada}
-1ª: {g1}
-2ª: {g2}
-
-🧠 Arquiteto
-"""
-
-        context.bot.send_message(chat_id=CHAT_ID, text=mensagem)
-
-
-# =========================
-# 📡 RADAR
-# =========================
-def radar(context):
-    context.bot.send_message(chat_id=CHAT_ID, text="📡 Radar ativo...")
-
-
-# =========================
-# 🚀 START
+# START
 # =========================
 def start(update, context):
-    update.message.reply_text("🤖 SNIPER MÁXIMO ATIVO")
-
+    update.message.reply_text("🤖 ARQUITETO PRO ONLINE")
 
 # =========================
-# 🚀 INICIALIZAÇÃO
+# INICIAR
 # =========================
 updater = Updater(TOKEN, use_context=True)
-
 dp = updater.dispatcher
 
 dp.add_handler(CommandHandler("start", start))
+dp.add_handler(CommandHandler("ligar", ligar))
+dp.add_handler(CommandHandler("desligar", desligar))
 
 job_queue = updater.job_queue
 
-# 🔥 TESTE (DEPOIS MUDA PRA 900 OU 1800)
-job_queue.run_repeating(sniper_programado, interval=60, first=10)
+job_queue.run_repeating(rodar_bot, interval=60, first=10)
+job_queue.run_repeating(relatorio, interval=3600, first=60)
 
-print("✅ ARQUITETO PRO ONLINE")
-print("🚀 Iniciando bot...")
+print("🚀 BOT RODANDO...")
 
 updater.start_polling()
 updater.idle()
