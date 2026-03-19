@@ -4,6 +4,9 @@ import requests
 from datetime import datetime
 from binance.client import Client
 from telegram.ext import Updater, CommandHandler
+import requests
+
+print(requests.get("https://ipinfo.io/json").text)
 
 print("🧠 ARQUITETO PRO 3.0")
 
