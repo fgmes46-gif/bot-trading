@@ -6,7 +6,14 @@ from binance.client import Client
 from telegram.ext import Updater, CommandHandler
 import requests
 
-print(requests.get("https://ipinfo.io/json").text)
+def mostrar_ip():
+    try:
+        ip = requests.get("https://api.ipify.org").text
+        print("IP do ambiente:", ip)
+    except Exception as e:
+        print("Erro ao obter IP:", e)
+
+mostrar_ip()
 
 print("🧠 ARQUITETO PRO 3.0")
 
