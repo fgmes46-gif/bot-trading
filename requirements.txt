@@ -1,3 +1,4 @@
-python-binance
+numpy
 requests
+python-binance
 python-telegram-bot
