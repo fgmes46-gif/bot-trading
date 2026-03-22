@@ -11,8 +11,8 @@ from telegram import Bot
 # =========================
 API_KEY = os.getenv("BINANCE_KEY")
 API_SECRET = os.getenv("BINANCE_SECRET")
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TOKEN = os.getenv"8266735750:AAGv7KqoN-nyFi84w7zYs893mzE0CgmTo-I"
+CHAT_ID = os.getenv"8342835768"
 MODO = os.getenv("MODO", "AUTO")
 
 client = Client(API_KEY, API_SECRET)
