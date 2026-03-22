@@ -1,12 +1,12 @@
 import os, json, logging, requests, openai
 from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ========================= Variáveis de ambiente =========================
-TOKEN = os.getenv("TELEGRAM_TOKEN")      # Token do bot
-CHAT_ID = os.getenv("CHAT_ID")           # Seu chat ID
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")   # URL completa do Railway, ex: https://bot-trading.up.railway.app/telegram
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Codex key
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 openai.api_key = OPENAI_API_KEY
 
@@ -73,36 +73,74 @@ def permitido():
     if s == "a" and OPS_A < 2: return True
     return False
 
-# ========================= Modelos de análise =========================
+# ========================= Modelos de análise com IA =========================
+def analizar_ia(candles, setor):
+    """
+    Analisa cada setor com OpenAI e retorna (direcao, confianca)
+    """
+    try:
+        prompt = f"""
+Você é um trader experiente. Analise os últimos candles do setor {setor}: {candles}.
+Diga se devemos 'CALL' ou 'PUT' e forneça uma confiança de 0 a 1.
+Retorne no formato: DIRECAO,CONFIANCA
+"""
+        response = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=prompt,
+            temperature=0,
+            max_tokens=10
+        )
+        resultado = response.choices[0].text.strip().split(",")
+        direcao = resultado[0].upper()
+        confianca = float(resultado[1])
+        return direcao, confianca
+    except Exception as e:
+        logging.error(f"Erro IA setor {setor}: {e}")
+        return None, 0
+
 def liquidez(c):
     highs=[x["high"] for x in c[-10:]]
     lows=[x["low"] for x in c[-10:]]
     topo=max(highs)
     fundo=min(lows)
     u=c[-1]
-    if u["high"] > topo and u["close"] < topo: return "PUT",3
-    if u["low"] < fundo and u["close"] > fundo: return "CALL",3
-    return None,0
+    dir_final = None
+    score = 0
+    if u["high"] > topo and u["close"] < topo: dir_final = "PUT"; score += 3
+    if u["low"] < fundo and u["close"] > fundo: dir_final = "CALL"; score += 3
+    ia_dir, ia_conf = analizar_ia(c[-10:], "liquidez")
+    if ia_dir in ["CALL","PUT"]: dir_final = ia_dir; score += ia_conf
+    return dir_final, score
 
 def tendencia(c):
     altas=sum(1 for x in c[-20:] if x["close"] > x["open"])
-    if altas >= 14: return "CALL",2
-    if (20 - altas) >= 14: return "PUT",2
-    return None,0
+    dir_final = None
+    score = 0
+    if altas >= 14: dir_final = "CALL"; score += 2
+    if (20 - altas) >= 14: dir_final = "PUT"; score += 2
+    ia_dir, ia_conf = analizar_ia(c[-20:], "tendencia")
+    if ia_dir in ["CALL","PUT"]: dir_final = ia_dir; score += ia_conf
+    return dir_final, score
 
 def momentum(d):
     o, cl, h, l = d["open"], d["close"], d["high"], d["low"]
+    dir_final = None
+    score = 0
     corpo = abs(cl - o)
     r = h - l
     if r > 0 and corpo > r*0.6:
-        return ("CALL" if cl > o else "PUT"),2
-    return None,0
+        dir_final = "CALL" if cl > o else "PUT"; score += 2
+    ia_dir, ia_conf = analizar_ia([d], "momentum")
+    if ia_dir in ["CALL","PUT"]: dir_final = ia_dir; score += ia_conf
+    return dir_final, score
 
 def volatilidade(c):
     ranges=[x["high"] - x["low"] for x in c[-10:]]
     m=sum(ranges)/len(ranges)
-    if 0.0002 < m < 0.02: return 1
-    return 0
+    score = 0
+    if 0.0002 < m < 0.02: score += 1
+    ia_dir, ia_conf = analizar_ia(c[-10:], "volatilidade")
+    return ia_dir, score + ia_conf
 
 # ========================= Gerar sinais =========================
 def gerar(d):
@@ -114,16 +152,10 @@ def gerar(d):
     dir_final = None
     score = 0
 
-    d1, w1 = liquidez(c)
-    if d1: dir_final = d1; score += w1
-
-    d2, w2 = tendencia(c)
-    if d2 and (not dir_final or d2 == dir_final): dir_final = d2; score += w2
-
-    d3, w3 = momentum(d)
-    if d3 and (not dir_final or d3 == dir_final): dir_final = d3; score += w3
-
-    score += volatilidade(c)
+    for func in [liquidez, tendencia, momentum, volatilidade]:
+        d1, s1 = func(c if func!=momentum else d)
+        if d1: dir_final = d1
+        score += s1
 
     if not dir_final: return None
     limite = ajuste()
@@ -139,21 +171,6 @@ def gerar(d):
 
     ULTIMA = chave
     return dir_final, p, score
-
-# ========================= Codex =========================
-def gerar_codigo(prompt):
-    try:
-        response = openai.Completion.create(
-            model="code-davinci-002",
-            prompt=prompt,
-            temperature=0.2,
-            max_tokens=300,
-            n=1
-        )
-        return response.choices[0].text.strip()
-    except Exception as e:
-        logging.error(f"Erro Codex: {e}")
-        return None
 
 # ========================= Envio Telegram =========================
 def enviar(par, direcao, p, score):
@@ -178,6 +195,27 @@ def enviar(par, direcao, p, score):
     except Exception as e:
         logging.error(f"Erro ao enviar mensagem: {e}")
 
+# ========================= Enviar trade Blitz =========================
+def enviar_trade(par, direcao, hora_entrada, reentradas=[]):
+    status = "🟩 Compra" if direcao=="CALL" else "🟥 Venda"
+    msg = f"""
+⚠️ TRADE RÁPIDO
+
+💵 Blitz: {par}
+⏰ Expiração = 1 Minuto
+🛎️ Entrada = {hora_entrada}
+{status}
+"""
+    for i, r in enumerate(reentradas, start=1):
+        msg += f"\n{i}ª reentrada - {r}"
+    msg += "\n\n👉🏼 Até 2 reentradas se necessário\n➡️ Clique aqui para abrir a corretora"
+    try:
+        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                      json={"chat_id":CHAT_ID,"text":msg},
+                      timeout=10)
+    except Exception as e:
+        logging.error(f"Erro ao enviar trade: {e}")
+
 # ========================= Rotas Flask =========================
 @app.route("/telegram", methods=["POST"])
 def telegram():
@@ -185,12 +223,10 @@ def telegram():
     d = request.json
     logging.info(f"Recebido POST do Telegram: {d}")
 
-    # Feedback WIN/LOSS
     if "callback_query" in d:
         r = d["callback_query"]["data"]
         if ULTIMA: reg(ULTIMA, r)
 
-    # Comando /codex
     if "message" in d:
         text = d["message"].get("text", "")
         chat_id = d["message"]["chat"]["id"]
@@ -200,10 +236,10 @@ def telegram():
             codigo = gerar_codigo(prompt)
             if codigo:
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                              json={"chat_id": chat_id, "text":f"```python\n{codigo}\n```", "parse_mode":"Markdown"})
+                              json={"chat_id": chat_id,"text":f"```python\n{codigo}\n```", "parse_mode":"Markdown"})
             else:
                 requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                              json={"chat_id": chat_id, "text":"Erro ao gerar código"} )
+                              json={"chat_id": chat_id,"text":"Erro ao gerar código"} )
     return jsonify({"ok": True})
 
 @app.route("/multi", methods=["POST"])
@@ -216,97 +252,16 @@ def multi():
     sinais.sort(key=lambda x: x[3], reverse=True)
     for s in sinais[:2]:
         enviar(s[0], s[1], s[2], s[3])
+        enviar_trade(
+            par=s[0],
+            direcao=s[1],
+            hora_entrada=datetime.now().strftime("%H:%M"),
+            reentradas=[
+                (datetime.now() + timedelta(minutes=1)).strftime("%H:%M"),
+                (datetime.now() + timedelta(minutes=2)).strftime("%H:%M")
+            ]
+        )
     return jsonify({"ok": True})
-
-@app.route("/")
-def home():
-    return "FUNDO QUANTITATIVO ATIVO 🏦"
-
-@app.route("/historico")
-def historico():
-    return jsonify({
-        "LOSS": LOSS,
-        "OPS_M": OPS_M,
-        "OPS_T": OPS_T,
-        "OPS_A": OPS_A,
-        "BASE": BASE,
-        "ULTIMA": ULTIMA,
-        "MEM": MEM
-    })
-
-# ========================= Dashboard =========================
-DASHBOARD_HTML = """
-<!doctype html>
-<html>
-<head>
-    <title>Fundo Quant Dashboard</title>
-    <style>
-        body { font-family: Arial, sans-serif; background:#f4f4f4; color:#333; margin:20px; }
-        h1 { color:#0b5ed7; }
-        table { border-collapse: collapse; width: 100%; margin-top:20px; }
-        th, td { border:1px solid #ccc; padding:8px; text-align:center; }
-        th { background:#0b5ed7; color:#fff; }
-        .status-ok { color:green; font-weight:bold; }
-        .status-error { color:red; font-weight:bold; }
-    </style>
-</head>
-<body>
-    <h1>Fundo Quant Dashboard 🏦</h1>
-    <h2>Status do Webhook</h2>
-    <p>Webhook URL: <strong>{{ webhook_url }}</strong> — 
-    Status: <span class="{{ 'status-ok' if webhook_ok else 'status-error' }}">{{ webhook_status }}</span></p>
-
-    <h2>Operações da Sessão</h2>
-    <table>
-        <tr><th>Session</th><th>Ops</th></tr>
-        <tr><td>Matutina (m)</td><td>{{ OPS_M }}</td></tr>
-        <tr><td>Tarde (t)</td><td>{{ OPS_T }}</td></tr>
-        <tr><td>Noite (a)</td><td>{{ OPS_A }}</td></tr>
-    </table>
-
-    <h2>Base Atual</h2>
-    <p>{{ BASE }}</p>
-
-    <h2>Última Chave</h2>
-    <p>{{ ULTIMA }}</p>
-
-    <h2>Histórico (MEM)</h2>
-    <table>
-        <tr><th>Chave</th><th>Wins</th><th>Loss</th></tr>
-        {% for k,v in MEM.items() %}
-        <tr><td>{{ k }}</td><td>{{ v.win }}</td><td>{{ v.loss }}</td></tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
-"""
-
-@app.route("/dashboard")
-def dashboard():
-    webhook_ok = False
-    webhook_status = "Desconhecido"
-    try:
-        r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=5)
-        if r.status_code == 200:
-            info = r.json().get("result", {})
-            url_set = info.get("url", "")
-            webhook_ok = url_set == WEBHOOK_URL
-            webhook_status = "OK" if webhook_ok else "Erro URL"
-        else:
-            webhook_status = f"HTTP {r.status_code}"
-    except Exception as e:
-        webhook_status = f"Erro: {e}"
-
-    return render_template_string(DASHBOARD_HTML,
-                                  webhook_url=WEBHOOK_URL,
-                                  webhook_ok=webhook_ok,
-                                  webhook_status=webhook_status,
-                                  OPS_M=OPS_M,
-                                  OPS_T=OPS_T,
-                                  OPS_A=OPS_A,
-                                  BASE=BASE,
-                                  ULTIMA=ULTIMA,
-                                  MEM=MEM)
 
 # ========================= Webhook automático =========================
 def set_webhook():
@@ -323,7 +278,6 @@ def set_webhook():
     except Exception as e:
         logging.error(f"Erro ao configurar webhook: {e} ❌")
 
-# ========================= Rodar Flask =========================
 if __name__ == "__main__":
     set_webhook()
     logging.info("Bot iniciado com Flask, testando rotas e webhook...")
