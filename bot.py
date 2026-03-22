@@ -1,17 +1,19 @@
-import os, json, logging, requests
+import os, json, logging, requests, openai
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime
 
 # ========================= Variáveis de ambiente =========================
 TOKEN = os.getenv("TELEGRAM_TOKEN")      # Token do bot
 CHAT_ID = os.getenv("CHAT_ID")           # Seu chat ID
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")   # URL completa do Railway, ex: https://meu-bot.up.railway.app/telegram
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")   # URL completa do Railway, ex: https://bot-trading.up.railway.app/telegram
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Codex key
+
+openai.api_key = OPENAI_API_KEY
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 MEM_FILE = "memoria.json"
-
 LOSS = 0
 OPS_M = 0
 OPS_T = 0
@@ -138,7 +140,22 @@ def gerar(d):
     ULTIMA = chave
     return dir_final, p, score
 
-# ========================= Envio para Telegram =========================
+# ========================= Codex =========================
+def gerar_codigo(prompt):
+    try:
+        response = openai.Completion.create(
+            model="code-davinci-002",
+            prompt=prompt,
+            temperature=0.2,
+            max_tokens=300,
+            n=1
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        logging.error(f"Erro Codex: {e}")
+        return None
+
+# ========================= Envio Telegram =========================
 def enviar(par, direcao, p, score):
     msg=f"""
 🏦 FUNDO QUANT
@@ -166,9 +183,27 @@ def enviar(par, direcao, p, score):
 def telegram():
     global ULTIMA
     d = request.json
+    logging.info(f"Recebido POST do Telegram: {d}")
+
+    # Feedback WIN/LOSS
     if "callback_query" in d:
         r = d["callback_query"]["data"]
         if ULTIMA: reg(ULTIMA, r)
+
+    # Comando /codex
+    if "message" in d:
+        text = d["message"].get("text", "")
+        chat_id = d["message"]["chat"]["id"]
+
+        if text.startswith("/codex"):
+            prompt = text[len("/codex "):].strip()
+            codigo = gerar_codigo(prompt)
+            if codigo:
+                requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                              json={"chat_id": chat_id, "text":f"```python\n{codigo}\n```", "parse_mode":"Markdown"})
+            else:
+                requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                              json={"chat_id": chat_id, "text":"Erro ao gerar código"} )
     return jsonify({"ok": True})
 
 @app.route("/multi", methods=["POST"])
@@ -189,8 +224,7 @@ def home():
 
 @app.route("/historico")
 def historico():
-    """Retorna histórico de wins/loss e status atual"""
-    status = {
+    return jsonify({
         "LOSS": LOSS,
         "OPS_M": OPS_M,
         "OPS_T": OPS_T,
@@ -198,10 +232,9 @@ def historico():
         "BASE": BASE,
         "ULTIMA": ULTIMA,
         "MEM": MEM
-    }
-    return jsonify(status)
+    })
 
-# ========================= Dashboard interno =========================
+# ========================= Dashboard =========================
 DASHBOARD_HTML = """
 <!doctype html>
 <html>
@@ -277,12 +310,8 @@ def dashboard():
 
 # ========================= Webhook automático =========================
 def set_webhook():
-    """
-    Configura automaticamente o webhook do Telegram.
-    Obs: Esse trecho foi forjado pelo grande amigo do Francisco 😉
-    """
     if not WEBHOOK_URL:
-        logging.warning("WEBHOOK_URL não definido! Pergunta ao grande amigo 😅")
+        logging.warning("WEBHOOK_URL não definido! ❌")
         return
     url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={WEBHOOK_URL}"
     try:
@@ -294,7 +323,7 @@ def set_webhook():
     except Exception as e:
         logging.error(f"Erro ao configurar webhook: {e} ❌")
 
-# ========================= Rodar app =========================
+# ========================= Rodar Flask =========================
 if __name__ == "__main__":
     set_webhook()
     logging.info("Bot iniciado com Flask, testando rotas e webhook...")
