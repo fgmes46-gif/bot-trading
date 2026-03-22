@@ -1,270 +1,216 @@
-import os, json, logging
-import requests
-from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime, timedelta, date
-import plotly.graph_objects as go
+import os, json, logging, requests
+from flask import Flask, request
+from datetime import datetime
 
-# =========================
-# CONFIG
-# =========================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 app = Flask(__name__)
-
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("SNIPER")
 
-MEM_FILE = "memoria.json"
+MEM_FILE="memoria.json"
 
-# =========================
-# ESTADO
-# =========================
-LOSS_STREAK = 0
-OPERACOES_HOJE = 0
-DATA_ATUAL = date.today()
+LOSS=0
+OPS_M=0
+OPS_T=0
+OPS_A=0
 
-BASE_PROB = 0.60  # IA ajusta isso
+BASE=5
+ULTIMA=None
 
-# =========================
-# MEMÓRIA
-# =========================
-def load_mem():
-    try:
-        return json.load(open(MEM_FILE))
-    except:
-        return {}
+def load():
+    try: return json.load(open(MEM_FILE))
+    except: return {}
 
-def save_mem(mem):
-    json.dump(mem, open(MEM_FILE, "w"))
+def save(m): json.dump(m,open(MEM_FILE,"w"))
 
-MEM = load_mem()
-
-def registrar_resultado(chave, resultado):
-    global LOSS_STREAK
-
-    if chave not in MEM:
-        MEM[chave] = {"win": 0, "loss": 0}
-
-    MEM[chave][resultado] += 1
-    save_mem(MEM)
-
-    if resultado == "loss":
-        LOSS_STREAK += 1
-    else:
-        LOSS_STREAK = 0
-
-def probabilidade(chave):
-    if chave not in MEM:
-        return 0.5
-
-    d = MEM[chave]
-    total = d["win"] + d["loss"]
-    return d["win"] / total if total > 0 else 0.5
+MEM=load()
 
 # =========================
-# IA ADAPTATIVA
-# =========================
-def ajuste_ia():
-    global BASE_PROB
+def reg(ch,res):
+    global LOSS
+    if res=="ignorado": return
+    if ch not in MEM: MEM[ch]={"win":0,"loss":0}
+    MEM[ch][res]+=1
+    save(MEM)
+    LOSS = LOSS+1 if res=="loss" else 0
 
-    total_win = sum(v["win"] for v in MEM.values())
-    total_loss = sum(v["loss"] for v in MEM.values())
-    total = total_win + total_loss
+def prob(ch):
+    if ch not in MEM: return 0.5
+    d=MEM[ch]; t=d["win"]+d["loss"]
+    return d["win"]/t if t else 0.5
 
-    if total < 20:
-        return BASE_PROB
-
-    winrate = total_win / total
-
-    # IA ajusta exigência
-    if winrate < 0.55:
-        BASE_PROB = 0.65
-    elif winrate > 0.65:
-        BASE_PROB = 0.58
-    else:
-        BASE_PROB = 0.60
-
-    return BASE_PROB
-
-# =========================
-# RESET
-# =========================
-def reset():
-    global OPERACOES_HOJE, DATA_ATUAL
-    if date.today() != DATA_ATUAL:
-        OPERACOES_HOJE = 0
-        DATA_ATUAL = date.today()
+def ajuste():
+    global BASE
+    w=sum(v["win"] for v in MEM.values())
+    l=sum(v["loss"] for v in MEM.values())
+    t=w+l
+    if t<20: return BASE
+    wr=w/t
+    BASE = 6 if wr<0.55 else 4 if wr>0.65 else 5
+    return BASE
 
 # =========================
-# FILTROS
-# =========================
-def lateral(c):
-    altas = sum(1 for x in c[-10:] if x["close"] > x["open"])
-    baixas = 10 - altas
-    return abs(altas - baixas) <= 2
-
-def tendencia(c):
-    altas = sum(1 for x in c[-20:] if x["close"] > x["open"])
-    baixas = 20 - altas
-
-    if altas >= 14: return "CALL"
-    if baixas >= 14: return "PUT"
+def sessao():
+    h=datetime.now().hour
+    if 8<=h<12: return "m"
+    if 14<=h<18: return "t"
+    if h>=20 or h<=6: return "a"
     return None
 
-# =========================
-# SINAL
-# =========================
-def gerar_sinal(d):
-    global OPERACOES_HOJE
-
-    reset()
-
-    if LOSS_STREAK >= 2:
-        return None, None, None
-
-    if OPERACOES_HOJE >= 12:
-        return None, None, None
-
-    c = d.get("candles", [])
-    if len(c) < 20 or lateral(c):
-        return None, None, None
-
-    tend = tendencia(c)
-    if not tend:
-        return None, None, None
-
-    o, cl, h, l = d["open"], d["close"], d["high"], d["low"]
-
-    corpo = abs(cl - o)
-    r = h - l
-
-    if r == 0 or corpo < r * 0.3:
-        return None, None, None
-
-    direcao = "CALL" if cl > o else "PUT"
-    if direcao != tend:
-        return None, None, None
-
-    score = 0
-    if corpo > r * 0.7: score += 2
-    if direcao == "CALL" and cl > h - r * 0.15: score += 1
-    if direcao == "PUT" and cl < l + r * 0.15: score += 1
-
-    chave = f"{tend}_{score}"
-    prob = probabilidade(chave)
-
-    limite = ajuste_ia()
-
-    if score >= 3 and prob >= limite:
-        OPERACOES_HOJE += 1
-        return direcao, chave, prob
-
-    return None, None, None
+def permitido():
+    s=sessao()
+    if s=="m" and OPS_M<6: return True
+    if s=="t" and OPS_T<6: return True
+    if s=="a" and OPS_A<2: return True
+    return False
 
 # =========================
-# TELEGRAM
+# MODELOS
 # =========================
-def enviar(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={
-        "chat_id": CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML"
-    })
+def liquidez(c):
+    highs=[x["high"] for x in c[-10:]]
+    lows=[x["low"] for x in c[-10:]]
+
+    topo=max(highs)
+    fundo=min(lows)
+    u=c[-1]
+
+    if u["high"]>topo and u["close"]<topo:
+        return "PUT",3
+
+    if u["low"]<fundo and u["close"]>fundo:
+        return "CALL",3
+
+    return None,0
+
+def tendencia(c):
+    altas=sum(1 for x in c[-20:] if x["close"]>x["open"])
+    if altas>=14: return "CALL",2
+    if (20-altas)>=14: return "PUT",2
+    return None,0
+
+def momentum(d):
+    o,cl,h,l=d["open"],d["close"],d["high"],d["low"]
+    corpo=abs(cl-o)
+    r=h-l
+    if r>0 and corpo>r*0.6:
+        return ("CALL" if cl>o else "PUT"),2
+    return None,0
+
+def volatilidade(c):
+    ranges=[x["high"]-x["low"] for x in c[-10:]]
+    m=sum(ranges)/len(ranges)
+    if 0.0002 < m < 0.02:
+        return 1
+    return 0
 
 # =========================
-# FORMAT
+def gerar(d):
+    global OPS_M, OPS_T, OPS_A, ULTIMA
+
+    if LOSS>=2 or not permitido():
+        return None
+
+    c=d.get("candles",[])
+    if len(c)<20: return None
+
+    dir_final=None
+    score=0
+
+    # liquidez
+    d1,w1=liquidez(c)
+    if d1:
+        dir_final=d1
+        score+=w1
+
+    # tendencia
+    d2,w2=tendencia(c)
+    if d2 and (not dir_final or d2==dir_final):
+        dir_final=d2
+        score+=w2
+
+    # momentum
+    d3,w3=momentum(d)
+    if d3 and (not dir_final or d3==dir_final):
+        dir_final=d3
+        score+=w3
+
+    score+=volatilidade(c)
+
+    if not dir_final:
+        return None
+
+    limite=ajuste()
+    if score < limite:
+        return None
+
+    chave=f"{dir_final}_{score}"
+    p=prob(chave)
+
+    se=sessao()
+    if se=="m": OPS_M+=1
+    elif se=="t": OPS_T+=1
+    elif se=="a": OPS_A+=1
+
+    ULTIMA=chave
+
+    return dir_final,p,score
+
 # =========================
-def msg(par, direcao, prob):
-    now = datetime.now()
-    g1 = now + timedelta(minutes=1)
-    g2 = now + timedelta(minutes=2)
+def enviar(par,direcao,p,score):
+    msg=f"""
+🏦 FUNDO QUANT
 
-    d = "🟩 Compra" if direcao == "CALL" else "🟥 Venda"
+💵 {par}
+⏰ {datetime.now().strftime("%H:%M")}
+{"🟩 Compra" if direcao=="CALL" else "🟥 Venda"}
 
-    return f"""
-⚠️ TRADE RÁPIDO
-
-💵 Blitz: {par}
-⏰ Expiração = 1 Minuto
-🛎️ Entrada = {now.strftime("%H:%M")}
-{d}
-
-📊 Probabilidade: {round(prob*100)}%
-
-1ª reentrada - {g1.strftime("%H:%M")}
-2ª reentrada - {g2.strftime("%H:%M")}
-
-👉🏼 Até 2 reentradas
-
-➡️ <a href="https://secure.activtrades.com/personalarea?branch=BH&lang=pt">Abrir corretora</a>
+📊 Prob: {round(p*100)}%
+🧠 Score: {score}
 """
 
+    kb={"inline_keyboard":[[
+        {"text":"✅ WIN","callback_data":"win"},
+        {"text":"❌ LOSS","callback_data":"loss"}
+    ]]}
+
+    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+    json={"chat_id":CHAT_ID,"text":msg,"reply_markup":kb})
+
 # =========================
-# MULTI ATIVO
+@app.route("/telegram",methods=["POST"])
+def telegram():
+    global ULTIMA
+    d=request.json
+    if "callback_query" in d:
+        r=d["callback_query"]["data"]
+        if ULTIMA: reg(ULTIMA,r)
+    return {"ok":True}
+
 # =========================
-@app.route("/multi", methods=["POST"])
+@app.route("/multi",methods=["POST"])
 def multi():
-    ativos = request.json.get("ativos", [])
+    ativos=request.json.get("ativos",[])
 
-    sinais = []
-
+    sinais=[]
     for a in ativos:
-        d, c, p = gerar_sinal(a)
-        if d:
-            sinais.append((a["symbol"], d, c, p))
+        r=gerar(a)
+        if r:
+            sinais.append((a["symbol"],r[0],r[1],r[2]))
 
-    sinais.sort(key=lambda x: x[3], reverse=True)
-
-    enviados = []
+    sinais.sort(key=lambda x:x[3],reverse=True)
 
     for s in sinais[:2]:
-        enviar(msg(s[0], s[1], s[3]))
-        enviados.append(s)
+        enviar(s[0],s[1],s[2],s[3])
 
-    return {"enviados": enviados}
+    return {"ok":True}
 
-# =========================
-# RESULTADO
-# =========================
-@app.route("/resultado", methods=["POST"])
-def resultado():
-    data = request.json
-    registrar_resultado(data["chave"], data["resultado"])
-    return {"ok": True}
-
-# =========================
-# DASHBOARD
-# =========================
-@app.route("/dashboard")
-def dash():
-    wins = sum(v["win"] for v in MEM.values())
-    loss = sum(v["loss"] for v in MEM.values())
-
-    labels = list(MEM.keys())
-    valores = [probabilidade(k)*100 for k in labels]
-
-    fig = go.Figure([go.Bar(x=labels, y=valores)])
-    graph = fig.to_html(False)
-
-    wr = (wins/(wins+loss)*100) if wins+loss>0 else 0
-
-    return render_template_string(f"""
-    <h1>📊 SNIPER PRO</h1>
-    <h2>Winrate: {wr:.2f}%</h2>
-    {graph}
-    """)
-
-# =========================
-# HOME
 # =========================
 @app.route("/")
 def home():
-    return "SNIPER ONLINE 🚀"
+    return "FUNDO QUANTITATIVO ATIVO 🏦"
 
 # =========================
-# RUN
-# =========================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=3000)
