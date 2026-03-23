@@ -18,6 +18,11 @@ MEM_FILE = "memoria.json"
 LOSS = 0
 BASE = 5
 
+# ========================= STATUS =========================
+@app.route("/")
+def home():
+    return "🤖 BOT ONLINE"
+
 # ========================= MEMÓRIA =========================
 def load():
     try:
@@ -49,15 +54,7 @@ def prob(ch):
 # ========================= OPENAI =========================
 def analizar_ia(candles):
     try:
-        prompt = f"""
-Analise os candles:
-{candles}
-
-Responda:
-CALL,0.75
-ou
-PUT,0.65
-"""
+        prompt = f"Analise os candles e responda CALL ou PUT com confiança 0-1:\n{candles}"
         r = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -71,7 +68,7 @@ PUT,0.65
         d, c = txt.split(",")
         return d.upper(), float(c)
     except Exception as e:
-        logging.error(e)
+        logging.error(f"Erro IA: {e}")
         return None, 0
 
 # ========================= ESTRATÉGIAS =========================
@@ -123,10 +120,9 @@ def gerar(candles):
             direcao = d
             score += s
 
-    vol, s_vol = volatilidade(candles)
+    _, s_vol = volatilidade(candles)
     score += s_vol
 
-    # IA só entra se tiver base (economiza custo)
     if score >= 4:
         ia_dir, ia_conf = analizar_ia(candles[-10:])
         if ia_dir:
@@ -178,21 +174,29 @@ def get_binance(symbol):
             "low":float(c[3]),
             "close":float(c[4])
         } for c in data]
-    except:
+    except Exception as e:
+        logging.error(f"Erro Binance: {e}")
         return []
 
 # ========================= LOOP =========================
 def loop():
+    # mensagem de vida
+    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        json={"chat_id": CHAT_ID, "text": "🟢 Bot ONLINE e monitorando mercado..."})
+
     while True:
         try:
             for par in ["BTCUSDT","ETHUSDT"]:
+                logging.info(f"🔎 Analisando {par}")
                 candles = get_binance(par)
+
                 if candles:
                     r = gerar(candles)
                     if r:
                         enviar(par, *r)
+
         except Exception as e:
-            logging.error(e)
+            logging.error(f"Erro loop: {e}")
 
         time.sleep(60)
 
