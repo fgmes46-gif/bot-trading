@@ -1,6 +1,7 @@
-import os, json, logging, requests, openai, threading, time
+import os, json, logging, requests, threading, time
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
+from openai import OpenAI
 
 # ========================= ENV =========================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -8,14 +9,13 @@ CHAT_ID = os.getenv("CHAT_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 MEM_FILE = "memoria.json"
 LOSS = 0
-OPS_M = OPS_T = OPS_A = 0
 BASE = 5
 
 # ========================= MEMÓRIA =========================
@@ -34,58 +34,106 @@ MEM = load()
 
 def reg(ch, res):
     global LOSS
-    if res == "ignorado": return
-    if ch not in MEM: MEM[ch] = {"win":0,"loss":0}
+    if ch not in MEM:
+        MEM[ch] = {"win":0,"loss":0}
     MEM[ch][res] += 1
     save(MEM)
     LOSS = LOSS + 1 if res == "loss" else 0
 
 def prob(ch):
     if ch not in MEM: return 0.5
-    d = MEM[ch]; t = d["win"] + d["loss"]
+    d = MEM[ch]
+    t = d["win"] + d["loss"]
     return d["win"]/t if t else 0.5
 
-# ========================= IA =========================
-def analizar_ia(candles, setor):
+# ========================= OPENAI =========================
+def analizar_ia(candles):
     try:
-        prompt = f"Analise os candles {candles}. Responda CALL ou PUT e confiança 0-1"
-        r = openai.Completion.create(
-            model="text-davinci-003",
-            prompt=prompt,
-            temperature=0,
-            max_tokens=10
+        prompt = f"""
+Analise os candles:
+{candles}
+
+Responda:
+CALL,0.75
+ou
+PUT,0.65
+"""
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role":"system","content":"Você é um trader profissional."},
+                {"role":"user","content":prompt}
+            ],
+            temperature=0.2,
+            max_tokens=20
         )
-        txt = r.choices[0].text.strip().split(",")
-        return txt[0].upper(), float(txt[1])
-    except:
+        txt = r.choices[0].message.content.strip()
+        d, c = txt.split(",")
+        return d.upper(), float(c)
+    except Exception as e:
+        logging.error(e)
         return None, 0
 
 # ========================= ESTRATÉGIAS =========================
+def liquidez(c):
+    highs = [x["high"] for x in c[-10:]]
+    lows = [x["low"] for x in c[-10:]]
+    topo = max(highs)
+    fundo = min(lows)
+    u = c[-1]
+
+    if u["high"] > topo and u["close"] < topo:
+        return "PUT", 3
+    if u["low"] < fundo and u["close"] > fundo:
+        return "CALL", 3
+    return None, 0
+
 def tendencia(c):
     altas = sum(1 for x in c[-20:] if x["close"] > x["open"])
-    if altas >= 14: return "CALL", 2
-    if (20-altas) >= 14: return "PUT", 2
+    if altas >= 14:
+        return "CALL", 2
+    if (20-altas) >= 14:
+        return "PUT", 2
     return None, 0
 
 def momentum(d):
-    if abs(d["close"]-d["open"]) > (d["high"]-d["low"])*0.6:
-        return ("CALL" if d["close"]>d["open"] else "PUT"), 2
+    o, cl, h, l = d["open"], d["close"], d["high"], d["low"]
+    if abs(cl-o) > (h-l)*0.6:
+        return ("CALL" if cl>o else "PUT"), 2
+    return None, 0
+
+def volatilidade(c):
+    ranges = [x["high"]-x["low"] for x in c[-10:]]
+    m = sum(ranges)/len(ranges)
+    if 0.0002 < m < 0.02:
+        return "OK", 1
     return None, 0
 
 # ========================= GERAR =========================
-def gerar(d):
-    c = d["candles"]
-    if len(c) < 20: return None
+def gerar(candles):
+    if len(candles) < 20:
+        return None
 
     score = 0
     direcao = None
 
-    for func in [tendencia, lambda x: momentum(x[-1])]:
-        d1, s1 = func(c)
-        if d1: direcao = d1
-        score += s1
+    for func in [liquidez, tendencia, lambda x: momentum(x[-1])]:
+        d, s = func(candles)
+        if d:
+            direcao = d
+            score += s
 
-    if score < BASE or not direcao:
+    vol, s_vol = volatilidade(candles)
+    score += s_vol
+
+    # IA só entra se tiver base (economiza custo)
+    if score >= 4:
+        ia_dir, ia_conf = analizar_ia(candles[-10:])
+        if ia_dir:
+            direcao = ia_dir
+            score += ia_conf
+
+    if not direcao or score < BASE:
         return None
 
     chave = f"{direcao}_{score}_{int(time.time())}"
@@ -101,7 +149,10 @@ def enviar(par, direcao, p, score, chave):
 {"🟩 Compra" if direcao=="CALL" else "🟥 Venda"}
 
 📊 Prob: {round(p*100)}%
-🧠 Score: {score}
+🧠 Score: {round(score,2)}
+
+1ª reentrada - {(datetime.now()+timedelta(minutes=1)).strftime('%H:%M')}
+2ª reentrada - {(datetime.now()+timedelta(minutes=2)).strftime('%H:%M')}
 """
 
     kb = {
@@ -137,7 +188,7 @@ def loop():
             for par in ["BTCUSDT","ETHUSDT"]:
                 candles = get_binance(par)
                 if candles:
-                    r = gerar({"candles":candles})
+                    r = gerar(candles)
                     if r:
                         enviar(par, *r)
         except Exception as e:
@@ -145,16 +196,14 @@ def loop():
 
         time.sleep(60)
 
-# ========================= TELEGRAM WEBHOOK =========================
+# ========================= TELEGRAM =========================
 @app.route("/telegram", methods=["POST"])
 def telegram():
     d = request.json
 
     if "callback_query" in d:
         data = d["callback_query"]["data"].split("|")
-        acao = data[0]
-        chave = data[1]
-        reg(chave, acao)
+        reg(data[1], data[0])
 
     return jsonify({"ok":True})
 
