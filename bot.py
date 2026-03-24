@@ -31,18 +31,19 @@ def sinais_hoje():
 
 # ================= PROBABILIDADE =================
 def prob(direcao):
-    dados = {"win":0,"loss":0}
+    wins = 0
+    losses = 0
 
     for k in MEM:
         if k.startswith(direcao):
-            dados["win"] += MEM[k]["win"]
-            dados["loss"] += MEM[k]["loss"]
+            wins += MEM[k]["win"]
+            losses += MEM[k]["loss"]
 
-    total = dados["win"] + dados["loss"]
+    total = wins + losses
     if total == 0:
         return 0.55
 
-    return dados["win"] / total
+    return wins / total
 
 # ================= VALIDAÇÃO =================
 def validar(d):
@@ -85,8 +86,8 @@ def enviar(d):
 
     kb = {
         "inline_keyboard":[[
-            {"text":"✅ WIN","callback_data":f"win|{d['id']}"},
-            {"text":"❌ LOSS","callback_data":f"loss|{d['id']}"}
+            {"text":"🟢 WIN","callback_data":f"win|{d['id']}"},
+            {"text":"🔴 LOSS","callback_data":f"loss|{d['id']}"}
         ]]
     }
 
@@ -106,15 +107,15 @@ def sinal():
 
     d = request.json
 
-    # Limite diário
+    # limite diário
     if sinais_hoje() >= MAX_SINAIS_DIA:
         return {"ok": False, "msg": "limite diário"}
 
-    # Validação leve
+    # validação leve
     if not validar(d):
         return {"ok": False, "msg": "reprovado"}
 
-    # Confiança baseada histórico
+    # confiança histórica
     confianca = prob(d["direcao"])
 
     if confianca < 0.50:
@@ -126,7 +127,8 @@ def sinal():
     MEM[trade_id] = {
         "win": 0,
         "loss": 0,
-        "data": datetime.now().strftime("%Y-%m-%d")
+        "data": datetime.now().strftime("%Y-%m-%d"),
+        "status": "pending"  # <- importante
     }
 
     save(MEM)
@@ -147,8 +149,9 @@ def telegram():
     if "callback_query" in data:
         res, trade_id = data["callback_query"]["data"].split("|")
 
-        if trade_id in MEM:
+        if trade_id in MEM and MEM[trade_id]["status"] == "pending":
             MEM[trade_id][res] += 1
+            MEM[trade_id]["status"] = "done"  # <- trava duplicação
             save(MEM)
 
     return jsonify({"ok": True})
@@ -156,4 +159,4 @@ def telegram():
 # ================= STATUS =================
 @app.route("/")
 def home():
-    return "🚂 Railway Inteligente ONLINE"
+    return "🚂 Railway Inteligente FINAL ONLINE"
