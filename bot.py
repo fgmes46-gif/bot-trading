@@ -107,6 +107,13 @@ def sinal():
 
     d = request.json
 
+    @app.route('/sinal', methods=['POST'])
+def receber_sinal():
+    data = request.json
+    
+    print("🔥 SINAL RECEBIDO:", data)  # 👈 ADICIONA ISSO
+
+
     # limite diário
     if sinais_hoje() >= MAX_SINAIS_DIA:
         return {"ok": False, "msg": "limite diário"}
