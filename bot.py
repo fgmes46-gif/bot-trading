@@ -101,9 +101,7 @@ def enviar(d):
     )
 
 # ================= RECEBER SINAL =================
-@app.route("/sinal", methods=["POST"])
-def sinal():
-    global MEM
+
 
     d = request.json
 
