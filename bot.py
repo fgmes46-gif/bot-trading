@@ -109,8 +109,6 @@ def enviar(d):
 def receber_sinal():
 
     
-    data = request.json
-    
     print("🔥 SINAL RECEBIDO:", data)  # 👈 ADICIONA ISSO
 
 
