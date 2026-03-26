@@ -100,49 +100,55 @@ def enviar(d):
         }
     )
 
-# ================= RECEBER SINAL =================
 
+
+
+    # ================= RECEBER SINAL =================
+@app.route("/sinal", methods=["POST"])
+def sinal():
+    global MEM
 
     d = request.json
 
-    @app.route('/sinal', methods=['POST'])
-def receber_sinal():
-
-    
-    print("🔥 SINAL RECEBIDO:", data)  # 👈 ADICIONA ISSO
-
+    print("🔥 SINAL RECEBIDO:", d)  # DEBUG
 
     # limite diário
     if sinais_hoje() >= MAX_SINAIS_DIA:
+        print("⛔ LIMITE DIÁRIO ATINGIDO")
         return {"ok": False, "msg": "limite diário"}
 
     # validação leve
     if not validar(d):
+        print("❌ SINAL REPROVADO")
         return {"ok": False, "msg": "reprovado"}
 
     # confiança histórica
     confianca = prob(d["direcao"])
+    print(f"📊 CONFIANÇA: {confianca:.2f}")
 
     if confianca < 0.50:
+        print("⚠️ BAIXA CONFIANÇA")
         return {"ok": False, "msg": "baixa confiança"}
 
-    # ID único
+    # ID único do trade
     trade_id = f"{d['direcao']}_{int(datetime.now().timestamp())}"
 
     MEM[trade_id] = {
         "win": 0,
         "loss": 0,
         "data": datetime.now().strftime("%Y-%m-%d"),
-        "status": "pending"  # <- importante
+        "status": "pending"
     }
 
     save(MEM)
 
     d["id"] = trade_id
 
+    print("📡 ENVIANDO PARA TELEGRAM...")
     enviar(d)
 
     return {"ok": True}
+        
 
 # ================= TELEGRAM CALLBACK =================
 @app.route("/telegram", methods=["POST"])
