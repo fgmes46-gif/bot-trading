@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+print("🔑 TOKEN:", TOKEN)
+print("💬 CHAT_ID:", CHAT_ID)
+
 app = Flask(__name__)
 
 MEM_FILE = "memoria.json"
@@ -62,75 +65,82 @@ def validar(d):
 
 # ================= TELEGRAM =================
 def enviar(d):
-    entrada = datetime.strptime(d["entrada"], "%H:%M")
-    tempo = d["tempo"]
+    try:
+        print("📡 Preparando envio...")
 
-    r1 = (entrada + timedelta(minutes=tempo)).strftime("%H:%M")
-    r2 = (entrada + timedelta(minutes=tempo*2)).strftime("%H:%M")
+        entrada = datetime.strptime(d["entrada"], "%H:%M")
+        tempo = d["tempo"]
 
-    msg = f"""
-⚠️ TRADE RÁPIDO
+        r1 = (entrada + timedelta(minutes=tempo)).strftime("%H:%M")
+        r2 = (entrada + timedelta(minutes=tempo*2)).strftime("%H:%M")
 
-💵 Blitz: {d['par']}
-⏰ Expiração = {tempo} Minuto{'s' if tempo>1 else ''}
-🛎️ Entrada = {d['entrada']}
-{"🟩 Compra (Para cima)" if d['direcao']=="CALL" else "🟥 Venda (Para baixo)"}
+        msg = f"""
+TESTE BOT 🚀
 
-1ª reentrada - {r1}
-2ª reentrada - {r2}
-
-👉🏼 Até 2 reentradas se necessário
-
-➡️ Clique aqui para abrir a corretora
+Par: {d['par']}
+Entrada: {d['entrada']}
+Direção: {d['direcao']}
 """
 
-    kb = {
-        "inline_keyboard":[[
-            {"text":"🟢 WIN","callback_data":f"win|{d['id']}"},
-            {"text":"🔴 LOSS","callback_data":f"loss|{d['id']}"}
-        ]]
-    }
+        # 🔥 TESTE 1: SEM BOTÃO
+        res = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": msg
+            }
+        )
 
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "reply_markup": kb
-        }
-    )
+        print("📨 STATUS:", res.status_code)
+        print("📨 RESPOSTA:", res.text)
 
+        # 🔥 TESTE 2: COM BOTÃO (só se o primeiro funcionar)
+        if res.status_code == 200:
+            kb = {
+                "inline_keyboard":[[
+                    {"text":"🟢 WIN","callback_data":f"win|{d['id']}"},
+                    {"text":"🔴 LOSS","callback_data":f"loss|{d['id']}"}
+                ]]
+            }
 
+            res2 = requests.post(
+                f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                json={
+                    "chat_id": CHAT_ID,
+                    "text": "Teste com botão",
+                    "reply_markup": json.dumps(kb)
+                }
+            )
 
+            print("📨 STATUS BOTÃO:", res2.status_code)
+            print("📨 RESPOSTA BOTÃO:", res2.text)
 
-    # ================= RECEBER SINAL =================
+    except Exception as e:
+        print("❌ ERRO:", str(e))
+
+# ================= RECEBER SINAL =================
 @app.route("/sinal", methods=["POST"])
 def sinal():
     global MEM
 
     d = request.json
+    print("🔥 SINAL RECEBIDO:", d)
 
-    print("🔥 SINAL RECEBIDO:", d)  # DEBUG
-
-    # limite diário
     if sinais_hoje() >= MAX_SINAIS_DIA:
-        print("⛔ LIMITE DIÁRIO ATINGIDO")
-        return {"ok": False, "msg": "limite diário"}
+        print("⛔ LIMITE DIÁRIO")
+        return {"ok": False}
 
-    # validação leve
     if not validar(d):
-        print("❌ SINAL REPROVADO")
-        return {"ok": False, "msg": "reprovado"}
+        print("❌ REPROVADO")
+        return {"ok": False}
 
-    # confiança histórica
     confianca = prob(d["direcao"])
-    print(f"📊 CONFIANÇA: {confianca:.2f}")
+    print("📊 CONFIANÇA:", confianca)
 
     if confianca < 0.50:
         print("⚠️ BAIXA CONFIANÇA")
-        return {"ok": False, "msg": "baixa confiança"}
+        return {"ok": False}
 
-    # ID único do trade
     trade_id = f"{d['direcao']}_{int(datetime.now().timestamp())}"
 
     MEM[trade_id] = {
@@ -144,30 +154,26 @@ def sinal():
 
     d["id"] = trade_id
 
-    print("📡 ENVIANDO PARA TELEGRAM...")
     enviar(d)
 
     return {"ok": True}
-        
 
-# ================= TELEGRAM CALLBACK =================
-@app.route("/telegram", methods=["POST"])
-def telegram():
-    global MEM
+# ================= TESTE MANUAL =================
+@app.route("/teste")
+def teste():
+    print("🚀 TESTE MANUAL ACIONADO")
 
-    data = request.json
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        json={
+            "chat_id": CHAT_ID,
+            "text": "TESTE DIRETO VIA /teste 🚀"
+        }
+    )
 
-    if "callback_query" in data:
-        res, trade_id = data["callback_query"]["data"].split("|")
-
-        if trade_id in MEM and MEM[trade_id]["status"] == "pending":
-            MEM[trade_id][res] += 1
-            MEM[trade_id]["status"] = "done"  # <- trava duplicação
-            save(MEM)
-
-    return jsonify({"ok": True})
+    return "ok"
 
 # ================= STATUS =================
 @app.route("/")
 def home():
-    return "🚂 Railway Inteligente FINAL ONLINE"
+    return "🚂 DEBUG ONLINE"
