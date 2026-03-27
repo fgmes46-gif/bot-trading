@@ -1,12 +1,10 @@
 import os, json, requests
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from datetime import datetime, timedelta
 
+# ================= CONFIG =================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
-print("🔑 TOKEN:", TOKEN)
-print("💬 CHAT_ID:", CHAT_ID)
 
 app = Flask(__name__)
 
@@ -34,8 +32,7 @@ def sinais_hoje():
 
 # ================= PROBABILIDADE =================
 def prob(direcao):
-    wins = 0
-    losses = 0
+    wins, losses = 0, 0
 
     for k in MEM:
         if k.startswith(direcao):
@@ -43,10 +40,7 @@ def prob(direcao):
             losses += MEM[k]["loss"]
 
     total = wins + losses
-    if total == 0:
-        return 0.55
-
-    return wins / total
+    return wins / total if total > 0 else 0.55
 
 # ================= VALIDAÇÃO =================
 def validar(d):
@@ -66,57 +60,81 @@ def validar(d):
 # ================= TELEGRAM =================
 def enviar(d):
     try:
-        print("📡 Preparando envio...")
-
         entrada = datetime.strptime(d["entrada"], "%H:%M")
-        tempo = d["tempo"]
+        tempo = int(d["tempo"])
 
         r1 = (entrada + timedelta(minutes=tempo)).strftime("%H:%M")
-        r2 = (entrada + timedelta(minutes=tempo*2)).strftime("%H:%M")
+        r2 = (entrada + timedelta(minutes=tempo * 2)).strftime("%H:%M")
+
+        par = d['par'].replace("USDT", "/USDT")
 
         msg = f"""
-TESTE BOT 🚀
+⚠️ TRADE RÁPIDO
 
-Par: {d['par']}
-Entrada: {d['entrada']}
-Direção: {d['direcao']}
+💵 {par}
+⏰ Expiração = {tempo} Minuto
+🛎️ Entrada = {d['entrada']}
+{d['direcao']}
+
+1ª reentrada - {r1}
+2ª reentrada - {r2}
+
+👉🏼 Até 2 reentradas se necessário
 """
 
-        # 🔥 TESTE 1: SEM BOTÃO
-        res = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": msg
-            }
-        )
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-        print("📨 STATUS:", res.status_code)
-        print("📨 RESPOSTA:", res.text)
+        res = requests.post(url, json={
+            "chat_id": CHAT_ID,
+            "text": msg
+        })
 
-        # 🔥 TESTE 2: COM BOTÃO (só se o primeiro funcionar)
+        # ===== BOTÕES =====
         if res.status_code == 200:
             kb = {
-                "inline_keyboard":[[
-                    {"text":"🟢 WIN","callback_data":f"win|{d['id']}"},
-                    {"text":"🔴 LOSS","callback_data":f"loss|{d['id']}"}
+                "inline_keyboard": [[
+                    {"text": "🟢 WIN", "callback_data": f"win|{d['id']}"},
+                    {"text": "🔴 LOSS", "callback_data": f"loss|{d['id']}"}
                 ]]
             }
 
-            res2 = requests.post(
-                f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                json={
-                    "chat_id": CHAT_ID,
-                    "text": "Teste com botão",
-                    "reply_markup": json.dumps(kb)
-                }
-            )
-
-            print("📨 STATUS BOTÃO:", res2.status_code)
-            print("📨 RESPOSTA BOTÃO:", res2.text)
+            requests.post(url, json={
+                "chat_id": CHAT_ID,
+                "text": "Resultado da operação:",
+                "reply_markup": kb
+            })
 
     except Exception as e:
-        print("❌ ERRO:", str(e))
+        print("❌ ERRO TELEGRAM:", e)
+
+# ================= CALLBACK (WIN / LOSS) =================
+@app.route("/callback", methods=["POST"])
+def callback():
+    global MEM
+
+    data = request.json
+    print("📩 CALLBACK:", data)
+
+    try:
+        cb = data["callback_query"]
+        action, trade_id = cb["data"].split("|")
+
+        if trade_id in MEM:
+            if action == "win":
+                MEM[trade_id]["win"] += 1
+            elif action == "loss":
+                MEM[trade_id]["loss"] += 1
+
+            MEM[trade_id]["status"] = action
+            save(MEM)
+
+            print(f"✅ RESULTADO SALVO: {action} - {trade_id}")
+
+        return {"ok": True}
+
+    except Exception as e:
+        print("❌ ERRO CALLBACK:", e)
+        return {"ok": False}
 
 # ================= RECEBER SINAL =================
 @app.route("/sinal", methods=["POST"])
@@ -158,22 +176,19 @@ def sinal():
 
     return {"ok": True}
 
-# ================= TESTE MANUAL =================
+# ================= TESTE =================
 @app.route("/teste")
 def teste():
-    print("🚀 TESTE MANUAL ACIONADO")
-
     requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
         json={
             "chat_id": CHAT_ID,
-            "text": "TESTE DIRETO VIA /teste 🚀"
+            "text": "🚀 TESTE OK"
         }
     )
-
     return "ok"
 
 # ================= STATUS =================
 @app.route("/")
 def home():
-    return "🚂 DEBUG ONLINE"
+    return "🚂 BOT TRADING PROFISSIONAL ONLINE"
